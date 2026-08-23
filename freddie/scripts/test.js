@@ -1,0 +1,318 @@
+// Offline tests. No network, no real accounts — these prove the wiring is
+// sound before you spend money on it.  Run with:  node scripts/test.js
+
+process.env.OWNER_WHATSAPP = '+15551234567';
+process.env.OWNER_NAME = 'Fadi';
+process.env.TWILIO_ACCOUNT_SID = 'AC' + '0'.repeat(32);
+process.env.TWILIO_AUTH_TOKEN = 'fake-token';
+process.env.TWILIO_WHATSAPP_FROM = '+14155238886';
+process.env.OPENAI_API_KEY = 'sk-fake';
+process.env.VAPI_API_KEY = 'fake-vapi';
+process.env.VAPI_PHONE_NUMBER_ID = 'fake-number-id';
+process.env.VAPI_WEBHOOK_SECRET = 'secret123';
+process.env.PUBLIC_URL = 'https://freddie.test';
+process.env.DATA_DIR = './.testdata';
+process.env.PORT = '3999';
+
+import fs from 'node:fs';
+fs.rmSync('./.testdata', { recursive: true, force: true });
+
+let pass = 0, fail = 0;
+const t = async (name, fn) => {
+  try {
+    await fn();
+    console.log(`  ✓ ${name}`);
+    pass++;
+  } catch (err) {
+    console.log(`  ✗ ${name}\n      ${err.message}`);
+    fail++;
+  }
+};
+const eq = (a, b, msg) => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) {
+    throw new Error(msg || `expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+  }
+};
+const ok = (v, msg) => { if (!v) throw new Error(msg || 'expected truthy'); };
+
+console.log('\nFreddie — offline tests\n');
+
+// ── config ──────────────────────────────────────────────────────────────────
+console.log('config');
+const { config, normalisePhone } = await import('../src/config.js');
+
+await t('normalises phone numbers', () => {
+  eq(normalisePhone('whatsapp:+1 (555) 123-4567'), '+15551234567');
+  eq(normalisePhone('15551234567'), '+15551234567');
+  eq(normalisePhone('+962 79 123 4567'), '+962791234567');
+});
+await t('reads the owner and defaults', () => {
+  eq(config.owner.whatsapp, '+15551234567');
+  eq(config.behaviour.requireConfirmation, true);
+  eq(config.behaviour.maxCallsPerDay, 15);
+});
+await t('strips a trailing slash from PUBLIC_URL', () => {
+  eq(config.publicUrl, 'https://freddie.test');
+});
+
+// ── memory ──────────────────────────────────────────────────────────────────
+console.log('\nmemory');
+const memory = await import('../src/memory/store.js');
+
+await t('saves and finds a contact by name, partial name, and number', () => {
+  memory.saveContact({ name: 'Zaytinya', phone: '+1 202 555 0100', language: 'en', notes: 'likes booths' });
+  memory.saveContact({ name: 'Cousin Rami', phone: '+962791234567', language: 'ar' });
+  eq(memory.findContact('Zaytinya').phone, '+12025550100');
+  eq(memory.findContact('rami').name, 'Cousin Rami');
+  eq(memory.findContact('+962 79 123 4567').language, 'ar');
+  eq(memory.findContact('nobody'), null);
+});
+
+await t('updates rather than duplicates an existing contact', () => {
+  memory.saveContact({ name: 'Zaytinya DC', phone: '+12025550100' });
+  eq(memory.listContacts().filter((c) => c.phone === '+12025550100').length, 1);
+  eq(memory.findContact('+12025550100').name, 'Zaytinya DC');
+  eq(memory.findContact('+12025550100').notes, 'likes booths', 'existing notes should survive');
+});
+
+await t('counts calls made today for the daily cap', () => {
+  eq(memory.callsToday(), 0);
+  memory.recordCall({ id: 'c1', to: '+12025550100', name: 'Zaytinya', goal: 'table for 4', status: 'dialling' });
+  memory.recordCall({ id: 'c2', to: '+12025550101', name: 'Other', goal: 'x', status: 'dialling' });
+  eq(memory.callsToday(), 2);
+});
+
+await t('updates a call in place', () => {
+  memory.updateCall('c1', { status: 'ended', outcome: 'Booked Friday 8pm' });
+  eq(memory.getCall('c1').status, 'ended');
+  eq(memory.getCall('c1').outcome, 'Booked Friday 8pm');
+});
+
+await t('trims the conversation so it cannot grow forever', () => {
+  for (let i = 0; i < 60; i++) memory.appendTurn('user', `message ${i}`);
+  ok(memory.conversationHistory().length <= 40, 'history should be capped at 40');
+  eq(memory.conversationHistory().at(-1).content, 'message 59');
+});
+
+// ── safety ──────────────────────────────────────────────────────────────────
+console.log('\nsafety');
+const { isBlockedNumber } = await import('../src/calls/vapi.js');
+
+await t('refuses emergency numbers', () => {
+  ok(isBlockedNumber('911'), '911 should be blocked');
+  ok(isBlockedNumber('112'), '112 should be blocked');
+  ok(isBlockedNumber('191'), 'Jordan police should be blocked');
+  ok(isBlockedNumber('988'), 'US crisis line should be blocked');
+});
+await t('allows ordinary numbers that merely contain those digits', () => {
+  ok(!isBlockedNumber('+12025550911'), 'a normal number ending 911 should be allowed');
+  ok(!isBlockedNumber('+962791234567'), 'a Jordanian mobile should be allowed');
+});
+
+// ── the mid-call escape hatch ───────────────────────────────────────────────
+console.log('\nmid-call ask');
+const pending = await import('../src/calls/pending.js');
+
+await t('resolves with the owner\'s answer when he replies', async () => {
+  ok(!pending.isWaiting(), 'should start idle');
+  const { promise } = pending.askAndWait('7:30 or 9:15?');
+  ok(pending.isWaiting(), 'should be waiting');
+  eq(pending.pendingQuestion(), '7:30 or 9:15?');
+
+  setTimeout(() => pending.deliverAnswer('take 9:15'), 20);
+  const answer = await promise;
+  eq(answer, 'take 9:15');
+  ok(!pending.isWaiting(), 'should be idle again');
+});
+
+await t('ignores an answer when nothing is waiting', () => {
+  eq(pending.deliverAnswer('hello?'), false);
+});
+
+// ── the server ──────────────────────────────────────────────────────────────
+console.log('\nserver');
+await import('../src/index.js');
+await new Promise((r) => setTimeout(r, 400));
+const base = 'http://127.0.0.1:3999';
+
+await t('answers /health with its real state', async () => {
+  const res = await fetch(`${base}/health`);
+  const body = await res.json();
+  eq(res.status, 200);
+  eq(body.status, 'ok');
+  eq(body.canPlaceCalls, true);
+  eq(body.whatsappFrom, '+14155238886');
+});
+
+await t('rejects a WhatsApp webhook with no Twilio signature', async () => {
+  const res = await fetch(`${base}/whatsapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ From: 'whatsapp:+15551234567', Body: 'call someone' }),
+  });
+  // Twilio always gets 200 so it doesn't retry; the rejection is internal.
+  eq(res.status, 200);
+  ok((await res.text()).includes('<Response>'), 'should return empty TwiML');
+});
+
+await t('rejects a Vapi request with the wrong secret', async () => {
+  const res = await fetch(`${base}/vapi/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'wrong' },
+    body: JSON.stringify({ message: { type: 'status-update' } }),
+  });
+  eq(res.status, 401);
+});
+
+await t('accepts a Vapi request with the right secret', async () => {
+  const res = await fetch(`${base}/vapi/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'secret123' },
+    body: JSON.stringify({ message: { type: 'status-update', status: 'ringing', call: { id: 'c1' } } }),
+  });
+  eq(res.status, 200);
+  await new Promise((r) => setTimeout(r, 100));
+  eq(memory.getCall('c1').status, 'ringing');
+});
+
+await t('holds a mid-call tool request open, then answers it', async () => {
+  const inFlight = fetch(`${base}/vapi/tools`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'secret123' },
+    body: JSON.stringify({
+      message: {
+        type: 'tool-calls',
+        toolCallList: [{ id: 'tool_1', name: 'ask_owner', arguments: { question: 'Booth or bar?' } }],
+      },
+    }),
+  });
+
+  // Give it a moment to register, then answer the way a WhatsApp reply would.
+  await new Promise((r) => setTimeout(r, 300));
+  ok(pending.isWaiting(), 'Freddie should be waiting on the owner');
+  pending.deliverAnswer('booth please');
+
+  const body = await (await inFlight).json();
+  eq(body.results.length, 1);
+  eq(body.results[0].toolCallId, 'tool_1');
+  ok(body.results[0].result.includes('booth please'), 'the answer should reach Freddie');
+});
+
+// ── prompts ─────────────────────────────────────────────────────────────────
+console.log('\nprompts');
+const prompts = await import('../src/brain/prompts.js');
+
+await t('the call prompt carries the dialect rules and the disclosure rule', () => {
+  const p = prompts.callSystemPrompt({ goal: 'book a table', language: 'ar', calleeName: 'Zaytinya' });
+  ok(p.includes('بدي'), 'should include the Jordanian swaps');
+  ok(!p.includes('أريد\n'), 'should not present MSA as the target form');
+  ok(p.toLowerCase().includes('assistant calling on behalf'), 'should disclose he is an assistant');
+  ok(p.includes('Jordanian Arabic'), 'should open in Arabic when asked');
+  ok(p.includes('Never read out a payment card number'), 'should carry the payment limit');
+});
+
+await t('the WhatsApp prompt lists real contacts and calls', () => {
+  const p = prompts.whatsappSystemPrompt({
+    contacts: memory.listContacts(),
+    recentCalls: memory.recentCalls(5),
+    prefs: { table: 'prefers late tables' },
+  });
+  ok(p.includes('Cousin Rami'), 'contacts should be listed');
+  ok(p.includes('+962791234567'), 'numbers should be listed');
+  ok(p.includes('prefers late tables'), 'preferences should be listed');
+  ok(!p.includes('undefined'), 'no undefined leaking into the prompt');
+  ok(!p.includes('NaN'), 'no NaN leaking into the prompt');
+});
+
+// ── the owner lock, and the reasoning loop ──────────────────────────────────
+console.log('\nowner lock');
+const twilioStub = (await import('twilio')).default;
+const sentMessages = twilioStub.__sent;
+const openaiStub = await import('openai');
+const { handleInbound } = await import('../src/whatsapp/inbound.js');
+
+await t('ignores a message from anyone who is not the owner', async () => {
+  const before = sentMessages.length;
+  await handleInbound({ From: 'whatsapp:+19998887777', Body: 'call the White House', NumMedia: '0' });
+  eq(sentMessages.length, before, 'Freddie must not reply to a stranger');
+});
+
+await t('acts on a message from the owner and replies', async () => {
+  const before = sentMessages.length;
+  openaiStub.__setNextCompletion({
+    choices: [{ message: { role: 'assistant', content: 'On it — calling now.' } }],
+  });
+  await handleInbound({ From: 'whatsapp:+15551234567', Body: 'book a table for four', NumMedia: '0' });
+  ok(sentMessages.length > before, 'Freddie should reply to his owner');
+  eq(sentMessages.at(-1).body, 'On it — calling now.');
+  eq(sentMessages.at(-1).to, 'whatsapp:+15551234567');
+});
+
+console.log('\nreasoning loop');
+const { think } = await import('../src/brain/agent.js');
+
+await t('runs a tool the model asks for, then answers in words', async () => {
+  // First turn: the model asks to look up a contact.
+  openaiStub.__setNextCompletion({
+    choices: [{
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'lookup_contact', arguments: JSON.stringify({ name: 'Rami' }) },
+        }],
+      },
+    }],
+  });
+  const answer = await think("what's Rami's number?");
+  // Second turn falls through to the stub default, proving the loop continued
+  // past the tool round rather than stopping at it.
+  eq(answer, 'Understood.');
+
+  const lastRequest = openaiStub.__calls.at(-1);
+  const toolReply = lastRequest.messages.find((m) => m.role === 'tool');
+  ok(toolReply, 'the tool result should be fed back to the model');
+  ok(toolReply.content.includes('+962791234567'), "Rami's number should reach the model");
+});
+
+await t('survives malformed tool arguments instead of crashing', async () => {
+  openaiStub.__setNextCompletion({
+    choices: [{
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_2',
+          type: 'function',
+          function: { name: 'lookup_contact', arguments: '{ this is not json' },
+        }],
+      },
+    }],
+  });
+  const answer = await think('who?');
+  eq(answer, 'Understood.', 'the loop should recover and still answer');
+});
+
+await t('refuses to dial an emergency number even if the model asks', async () => {
+  const { runTool } = await import('../src/brain/tools.js');
+  const result = await runTool('place_call', { to: '911', goal: 'test' });
+  eq(result.ok, false);
+  ok(result.message.includes('emergency'), 'should say why it refused');
+});
+
+await t('enforces the daily call ceiling', async () => {
+  const { runTool } = await import('../src/brain/tools.js');
+  for (let i = 0; i < 15; i++) {
+    memory.recordCall({ id: `bulk${i}`, to: '+12025550999', goal: 'x', status: 'ended' });
+  }
+  const result = await runTool('place_call', { to: '+12025550100', goal: 'another table' });
+  eq(result.ok, false);
+  ok(result.message.includes('limit'), 'should say the limit was hit');
+});
+
+// ── done ────────────────────────────────────────────────────────────────────
+fs.rmSync('./.testdata', { recursive: true, force: true });
+console.log(`\n${pass} passed, ${fail} failed\n`);
+process.exit(fail ? 1 : 0);
