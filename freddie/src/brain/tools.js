@@ -3,6 +3,7 @@
 
 import { config, normalisePhone, isDialable } from '../config.js';
 import { placeCall, getCallStatus, isBlockedNumber } from '../calls/vapi.js';
+import { findRestaurants } from '../places.js';
 import * as memory from '../memory/store.js';
 import { log } from '../util/log.js';
 
@@ -71,6 +72,30 @@ export const toolDefinitions = [
           query: { type: 'string', description: 'What to search for, including the area.' },
         },
         required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'find_restaurants',
+      description:
+        'Look up well-reviewed restaurants near a location, e.g. "Rainbow Street, Amman" or ' +
+        '"Dupont Circle, DC". Returns real, highly-rated places with their ratings — use this ' +
+        'whenever he asks for a restaurant recommendation instead of naming one from memory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          location: {
+            type: 'string',
+            description: 'A neighbourhood, address, landmark, or city. Required.',
+          },
+          cuisine: {
+            type: 'string',
+            description: 'Optional — a type of food if he mentioned one, e.g. "Italian", "seafood".',
+          },
+        },
+        required: ['location'],
       },
     },
   },
@@ -254,6 +279,9 @@ export async function runTool(name, args) {
 
     case 'find_place':
       return findPlace(args.query);
+
+    case 'find_restaurants':
+      return findRestaurants(args.location, args.cuisine);
 
     case 'save_contact': {
       const saved = memory.saveContact(args);
