@@ -111,6 +111,43 @@ export async function runDiagnostics() {
     add('Vapi', false, err.message);
   }
 
+  // ── Google Places ─────────────────────────────────────────────────────────
+  // Powers find_place (booking a specific named business) and find_restaurants
+  // / suggest_restaurants (recommendations). Without a working key both fail
+  // gracefully — Freddie says he can't look it up rather than crashing — but
+  // that's silent from the outside, so it's worth checking here explicitly.
+  if (!config.places.apiKey) {
+    add('Google Places', false, 'GOOGLE_PLACES_API_KEY is NOT SET — restaurant lookups and find_place will not work.');
+  } else {
+    try {
+      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': config.places.apiKey,
+          'X-Goog-FieldMask': 'places.displayName',
+        },
+        body: JSON.stringify({ textQuery: 'restaurants near Amman, Jordan', maxResultCount: 1 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const found = (data.places || [])[0]?.displayName?.text;
+        add('Google Places', true, found ? `key works — e.g. found "${found}"` : 'key works, but returned no results for the test query');
+      } else {
+        const detail = await res.text();
+        const hint =
+          res.status === 403
+            ? 'likely the "Places API (New)" isn\'t enabled on this key, or it\'s restricted to the wrong APIs/referrers'
+            : res.status === 400
+            ? 'likely a malformed or invalid key'
+            : `unexpected status`;
+        add('Google Places', false, `key rejected (${res.status}) — ${hint}. ${detail.slice(0, 200)}`);
+      }
+    } catch (err) {
+      add('Google Places', false, err.message);
+    }
+  }
+
   return {
     ok: checks.every((c) => c.ok),
     checks,
@@ -127,7 +164,7 @@ export async function runDiagnostics() {
  */
 export async function runTestCall(rawTo, goalOverride, lang) {
   const to = normalisePhone(rawTo || config.owner.whatsapp);
-  const language = ['ar', 'en', 'ask'].includes(lang) ? lang : config.vapi.defaultCallLanguage;
+  const language = ['ar', 'en'].includes(lang) ? lang : config.vapi.defaultCallLanguage;
 
   const goal =
     goalOverride ||

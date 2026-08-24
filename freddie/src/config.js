@@ -96,15 +96,19 @@ export function loadConfig() {
       voiceModel: process.env.VAPI_VOICE_MODEL || 'eleven_flash_v2_5',
       transcriberProvider: process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram',
       transcriberModel: process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
-      transcriberLanguage: process.env.VAPI_TRANSCRIBER_LANGUAGE || 'en',
+      // NOTE: the transcriber's language is now always derived directly from
+      // the call's own language ('ar' or 'en') in calls/vapi.js — there is no
+      // separate VAPI_TRANSCRIBER_LANGUAGE setting to configure any more.
 
       // The language calls use unless one is named explicitly. English by
-      // default because dialectal Arabic transcription is measurably weaker —
-      // set this to 'ar' in Railway if that ever stops being true.
-      // 'ask'  — open bilingually, let the person choose, then hold it (default)
-      // 'en'   — English only
+      // default — Freddie no longer opens a call bilingually and asking the
+      // other party to choose; set this to 'ar' in Railway to default to
+      // Arabic instead, or pass language:'ar' on a specific call.
+      // 'en'   — English only (default)
       // 'ar'   — Arabic only
-      defaultCallLanguage: process.env.DEFAULT_CALL_LANGUAGE || 'ask',
+      defaultCallLanguage: ['en', 'ar'].includes(process.env.DEFAULT_CALL_LANGUAGE)
+        ? process.env.DEFAULT_CALL_LANGUAGE
+        : 'en',
     },
     places: {
       apiKey: process.env.GOOGLE_PLACES_API_KEY || '',

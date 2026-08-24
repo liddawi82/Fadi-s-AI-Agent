@@ -17,21 +17,11 @@ import { keyIsValid, runDiagnostics, runTestCall, renderPage } from './diagnosti
 import * as memory from './memory/store.js';
 import { log } from './util/log.js';
 
-// One-time escape hatch: saved conversation history is meant to give Freddie
-// continuity, but a long enough run of real failures (like a bad night of
-// debugging) can leave it full of "sorry, technical problem" replies that
-// bias every answer afterwards, even once the underlying issues are fixed.
-// Setting RESET_CONVERSATION=true and redeploying wipes just that rolling
-// buffer — contacts, call history, and preferences are untouched — then this
-// variable should be removed so it doesn't fire on every future boot.
-// TEMP DEBUG — remove once RESET_CONVERSATION is confirmed working. Not a
-// secret, safe to log as-is.
-log.info(`DEBUG RESET_CONVERSATION raw value = ${JSON.stringify(process.env.RESET_CONVERSATION)}`);
-
-if (String(process.env.RESET_CONVERSATION || '').toLowerCase() === 'true') {
-  memory.clearConversation();
-  log.warn('RESET_CONVERSATION was set — cleared saved conversation history on boot.');
-}
+// One-time conversation reset already ran (RESET_CONVERSATION cleared a
+// history that had gotten stuck on old "technical problem" replies). The
+// escape hatch itself has been removed now that it's done its job — leaving
+// it in would wipe the conversation again on every future boot if the
+// Railway variable were ever left set to true by mistake.
 
 const app = express();
 app.set('trust proxy', true);
