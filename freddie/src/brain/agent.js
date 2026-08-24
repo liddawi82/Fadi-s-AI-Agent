@@ -45,6 +45,10 @@ export function detectReplyLanguage(text) {
 export async function think(text) {
   memory.appendTurn('user', text);
 
+  const replyLanguage = detectReplyLanguage(text);
+  const languageLabel =
+    replyLanguage === 'ar' ? 'Arabic' : replyLanguage === 'mixed' ? 'a mix of English and Arabic' : 'English';
+
   const messages = [
     {
       role: 'system',
@@ -53,18 +57,30 @@ export async function think(text) {
         recentCalls: memory.recentCalls(6),
         prefs: memory.preferences(),
         requireConfirmation: config.behaviour.requireConfirmation,
-        replyLanguage: detectReplyLanguage(text),
+        replyLanguage,
       }),
     },
     ...memory.conversationHistory(),
   ];
+
+  // A single instruction at the TOP of a long conversation isn't enough —
+  // once history has a run of Arabic replies in it, that pattern outweighs
+  // one line from several messages back. Re-asserting the language as the
+  // very LAST thing the model sees, right before it answers, holds up far
+  // better against that pull. Rebuilt fresh each step (not pushed into
+  // `messages`) so it always stays last, even after tool calls/results are
+  // appended below, and never pollutes the saved conversation history.
+  const languageReminder = {
+    role: 'system',
+    content: `Reminder, decided in code from his latest message, not by you: your next reply to him must be written in ${languageLabel}. This overrides any pull from the Arabic (or English) replies earlier in this conversation.`,
+  };
 
   for (let step = 0; step < MAX_STEPS; step++) {
     let response;
     try {
       response = await openai.chat.completions.create({
         model: config.openai.model,
-        messages,
+        messages: [...messages, languageReminder],
         tools: toolDefinitions,
         temperature: 0.5,
         ...(needsReasoningEffortNone(config.openai.model) ? { reasoning_effort: 'none' } : {}),

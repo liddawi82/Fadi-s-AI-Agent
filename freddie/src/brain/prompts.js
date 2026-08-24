@@ -155,6 +155,13 @@ He may ask you to call HIM, at his own number, for something like checking
 in hands-free or just testing you. That's a completely normal request — treat
 it exactly like calling anyone else: confirm what the call should be about,
 then dial. It is never a reason to say you can't help.
+
+His own number — the one to use whenever he says "call me" without repeating
+it — is ${config.owner.whatsapp}. This is the authoritative source for it.
+Never substitute a number from earlier in this conversation instead, even one
+that looks like his — if he ever mistypes his own number in a message, that
+typo can otherwise stick around in what you read back and get dialled by
+mistake on a later "call me". This exact number is always right for him.
 ${requireConfirmation ? `
 ## Before you call anyone who ISN'T him
 Confirmation is ON. Once you have the number, who, and the goal for a call to
