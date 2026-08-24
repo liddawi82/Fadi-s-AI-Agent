@@ -201,6 +201,70 @@ await t('holds a mid-call tool request open, then answers it', async () => {
   ok(body.results[0].result.includes('booth please'), 'the answer should reach Freddie');
 });
 
+// ── the fabrication fix ─────────────────────────────────────────────────────
+console.log('\ntasks taken during a call');
+const tasks = await import('../src/calls/tasks.js');
+
+await t('writes down a call requested mid-conversation', () => {
+  tasks.noteTask('callA', { to: '+15551119999', goal: 'tell her I am late', calleeName: 'wife' });
+  eq(tasks.pendingCount('callA'), 1);
+});
+
+await t('hands the task over exactly once, so it cannot be dialled twice', () => {
+  const first = tasks.drainTasks('callA');
+  eq(first.length, 1);
+  eq(first[0].calleeName, 'wife');
+  eq(tasks.drainTasks('callA').length, 0, 'second drain must be empty');
+});
+
+await t('keeps tasks from different calls apart', () => {
+  tasks.noteTask('callB', { to: '+15551112222', goal: 'x', calleeName: 'B' });
+  tasks.noteTask('callC', { to: '+15551113333', goal: 'y', calleeName: 'C' });
+  eq(tasks.drainTasks('callB').length, 1);
+  eq(tasks.drainTasks('callC')[0].calleeName, 'C');
+});
+
+await t('refuses a task with no call id', () => {
+  eq(tasks.noteTask(undefined, { to: '+1555', goal: 'x' }), false);
+});
+
+await t('the note_task tool rejects a junk number instead of accepting it', async () => {
+  const res = await fetch(`${base}/vapi/tools`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'secret123' },
+    body: JSON.stringify({ message: { type: 'tool-calls', call: { id: 'callD' },
+      toolCallList: [{ id: 'tc1', name: 'note_task', arguments: { to: 'her mobile', goal: 'tell her' } }] } }),
+  });
+  const body = await res.json();
+  ok(body.results[0].result.includes("isn't a usable phone number"), 'should refuse a non-number');
+  eq(tasks.pendingCount('callD'), 0, 'nothing should be queued');
+});
+
+await t('the note_task tool tells him NOT to claim it already happened', async () => {
+  const res = await fetch(`${base}/vapi/tools`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'secret123' },
+    body: JSON.stringify({ message: { type: 'tool-calls', call: { id: 'callE' },
+      toolCallList: [{ id: 'tc2', name: 'note_task',
+        arguments: { to: '+15551234000', goal: 'say I am running late', callee_name: 'Rania' } }] } }),
+  });
+  const body = await res.json();
+  ok(body.results[0].result.includes('do not say it has already happened'),
+     'the tool result must forbid claiming it is done');
+  eq(tasks.pendingCount('callE'), 1);
+  tasks.drainTasks('callE');
+});
+
+await t('the summary prompt forbids inventing outcomes', async () => {
+  const { summariseCall } = await import('../src/brain/agent.js');
+  const oa = await import('openai');
+  await summariseCall({ calleeName: 'wife', goal: 'x', transcript: '', endedReason: 'silence', language: 'en' });
+  const p = oa.__calls.at(-1).messages[0].content;
+  ok(p.includes('Do not invent'), 'must forbid invention');
+  ok(p.includes('NEVER claim you called someone else'), 'must forbid the exact failure seen');
+  ok(p.includes('never in his voice'), 'must keep the perspective straight');
+});
+
 // ── diagnostics endpoints ───────────────────────────────────────────────────
 console.log('\ndiagnostics');
 

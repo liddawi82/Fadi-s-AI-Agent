@@ -79,6 +79,35 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
             },
           },
         },
+        {
+          type: 'function',
+          async: false,
+          server: {
+            url: `${config.publicUrl}/vapi/tools`,
+            ...(config.vapi.webhookSecret ? { secret: config.vapi.webhookSecret } : {}),
+          },
+          function: {
+            name: 'note_task',
+            description:
+              'Write down a phone call you have been asked to make. Use this EVERY time someone on this call asks you to ring somebody — you cannot dial while you are on the line, so this is how the request actually gets done. Never say you have called someone unless you have used this tool. After using it, say you will handle it as soon as this call ends.',
+            parameters: {
+              type: 'object',
+              properties: {
+                to: {
+                  type: 'string',
+                  description: 'The number to call, in full international form. If you were not given a number, say so and do not guess.',
+                },
+                goal: {
+                  type: 'string',
+                  description: 'What that call must achieve, in enough detail to act on without you.',
+                },
+                callee_name: { type: 'string', description: 'Who is being called.' },
+                language: { type: 'string', enum: ['en', 'ar', 'auto'] },
+              },
+              required: ['to', 'goal'],
+            },
+          },
+        },
       ],
     },
 

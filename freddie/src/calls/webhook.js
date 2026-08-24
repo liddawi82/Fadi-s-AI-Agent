@@ -3,6 +3,9 @@
 
 import { config } from '../config.js';
 import { askAndWait } from './pending.js';
+import { noteTask, drainTasks } from './tasks.js';
+import { placeCall, isBlockedNumber } from './vapi.js';
+import { normalisePhone } from '../config.js';
 import { sendText, reply } from '../whatsapp/send.js';
 import { summariseCall } from '../brain/agent.js';
 import * as memory from '../memory/store.js';
@@ -48,6 +51,27 @@ export async function handleToolCall(message) {
           ? `${config.owner.name} says: ${answer}`
           : `${config.owner.name} didn't reply in time. Use your best judgement, lean towards accepting a reasonable option, and tell him afterwards what you chose.`,
       });
+    } else if (name === 'note_task') {
+      const to = normalisePhone(args.to || '');
+      if (!to || to.replace(/\D/g, '').length < 7) {
+        results.push({
+          toolCallId: id,
+          result: "That isn't a usable phone number. Ask them for the full number, and do not claim you'll call until you have it.",
+        });
+      } else if (isBlockedNumber(to)) {
+        results.push({ toolCallId: id, result: 'That is an emergency line. Refuse, and say why.' });
+      } else {
+        noteTask(message?.call?.id, {
+          to,
+          goal: args.goal || 'No goal given.',
+          calleeName: args.callee_name || to,
+          language: args.language || 'auto',
+        });
+        results.push({
+          toolCallId: id,
+          result: `Written down. You WILL ring ${args.callee_name || to} the moment this call ends. Tell them so — and do not say it has already happened.`,
+        });
+      }
     } else {
       results.push({ toolCallId: id, result: `Unknown tool "${name}".` });
     }
@@ -86,6 +110,31 @@ export async function handleEndOfCall(message) {
   }
 
   await reply(text, { asVoice: config.behaviour.voiceReplies });
+
+  // Now do whatever he agreed to during the call. This is the step whose
+  // absence let him claim he'd rung someone when he hadn't.
+  const tasks = drainTasks(callId);
+  for (const task of tasks) {
+    try {
+      const placed = await placeCall({
+        to: task.to,
+        goal: task.goal,
+        language: task.language,
+        calleeName: task.calleeName,
+      });
+      memory.recordCall({
+        id: placed.id,
+        to: task.to,
+        name: task.calleeName,
+        goal: task.goal,
+        status: 'dialling',
+      });
+      await sendText(`Calling ${task.calleeName} now, as you asked.`);
+    } catch (err) {
+      log.error(`Follow-up call to ${task.to} failed:`, err.message);
+      await sendText(`I couldn't reach ${task.calleeName} — ${err.message}`);
+    }
+  }
 }
 
 /** Route a Vapi server message to the right handler. */

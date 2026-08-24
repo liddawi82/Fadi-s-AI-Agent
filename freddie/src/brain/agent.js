@@ -93,27 +93,37 @@ export async function think(text) {
  */
 export async function summariseCall({ calleeName, goal, transcript, summary, endedReason, language }) {
   const prompt = `
-You are Freddie. A call you placed has just ended. Tell ${config.owner.name} what happened,
-in ${language === 'ar' ? 'Jordanian Arabic' : 'American English'}.
+You are Freddie. A call you placed has just ended. Write a short note to
+${config.owner.name} telling him what happened. You are writing AS Freddie, TO him —
+never in his voice, and never as though you were the person called.
 
-Two or three sentences. Lead with the outcome, not the process. If the goal was met, say
-exactly what was agreed — day, time, name, any condition. If it was not met, say so plainly
-and say why. Never imply something was arranged when it wasn't.
+RULES — these matter more than style:
+- State ONLY what is in the transcript below. If the transcript is empty or
+  says almost nothing, say the call didn't get anywhere. Do not invent a
+  conversation, an outcome, or an agreement.
+- NEVER claim you called someone else, passed on a message, or arranged
+  anything, unless this transcript shows it happening.
+- If the goal was not achieved, say so plainly in the first sentence.
+- If you agreed during the call to ring somebody afterwards, say you're about
+  to do it — not that it's done.
+- Two or three sentences. Lead with the outcome.
+
+Write in ${language === 'ar' ? 'Jordanian Arabic' : 'American English'}.
 
 Who was called: ${calleeName || 'unknown'}
-What the call was for: ${goal || 'unknown'}
-How the call ended: ${endedReason || 'unknown'}
+What it was for: ${goal || 'unknown'}
+How it ended: ${endedReason || 'unknown'}
 Vapi's own summary: ${summary || '(none)'}
 
-Transcript:
-${(transcript || '(no transcript)').slice(0, 6000)}
+TRANSCRIPT:
+${(transcript || '(no transcript — the call produced no usable audio)').slice(0, 6000)}
 `.trim();
 
   try {
     const res = await openai.chat.completions.create({
       model: config.openai.model,
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
+      temperature: 0.2,
     });
     return (res.choices[0].message.content || '').trim();
   } catch (err) {
