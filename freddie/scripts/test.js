@@ -240,6 +240,35 @@ await t('the note_task tool rejects a junk number instead of accepting it', asyn
   eq(tasks.pendingCount('callD'), 0, 'nothing should be queued');
 });
 
+// This is the real-world failure: on a live call Freddie was given a local
+// number, passed it through as ten bare digits, promised to ring "Chris", and
+// the follow-up died on a 400 from Vapi. The number must be repaired here, not
+// discovered to be broken after the call has already ended.
+await t('a bare ten-digit number is completed to E.164 rather than dialled as-is', async () => {
+  const res = await fetch(`${base}/vapi/tools`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'secret123' },
+    body: JSON.stringify({ message: { type: 'tool-calls', call: { id: 'callF' },
+      toolCallList: [{ id: 'tc3', name: 'note_task',
+        arguments: { to: '945 900 8800', goal: 'catch the bus', callee_name: 'Chris' } }] } }),
+  });
+  const body = await res.json();
+  ok(!body.results[0].result.includes("isn't a usable"), 'a local number should be repaired, not refused');
+  eq(tasks.pendingCount('callF'), 1, 'the task should be queued');
+});
+
+await t('a number too short to dial is refused, whatever punctuation it carries', async () => {
+  const res = await fetch(`${base}/vapi/tools`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-vapi-secret': 'secret123' },
+    body: JSON.stringify({ message: { type: 'tool-calls', call: { id: 'callG' },
+      toolCallList: [{ id: 'tc4', name: 'note_task', arguments: { to: '+55 123', goal: 'x' } }] } }),
+  });
+  const body = await res.json();
+  ok(body.results[0].result.includes("isn't a usable phone number"), 'should refuse');
+  eq(tasks.pendingCount('callG'), 0, 'nothing should be queued');
+});
+
 await t('the note_task tool tells him NOT to claim it already happened', async () => {
   const res = await fetch(`${base}/vapi/tools`, {
     method: 'POST',
@@ -314,12 +343,6 @@ await t('the default test call is a real conversation, not a canned test', async
   eq(r.to, '+15551234567');
 });
 
-await t('rejects a nonsense language and falls back to auto', async () => {
-  const { runTestCall } = await import('../src/diagnostics.js');
-  const r = await runTestCall('+15551234567', undefined, 'klingon');
-  eq(r.language, 'auto');
-});
-
 await t('reports the reason when a test call cannot be placed', async () => {
   // No real Vapi in tests, so the fetch to api.vapi.ai fails — the point is
   // that the failure is reported clearly instead of throwing a 500.
@@ -334,10 +357,11 @@ await t('reports the reason when a test call cannot be placed', async () => {
 // ── prompts ─────────────────────────────────────────────────────────────────
 console.log('\nprompts');
 const prompts = await import('../src/brain/prompts.js');
+const toolDefs = await import('../src/brain/tools.js');
 
 await t('the call prompt carries the dialect rules and the disclosure rule', () => {
   const p = prompts.callSystemPrompt({ goal: 'book a table', language: 'ar', calleeName: 'Zaytinya' });
-  ok(p.includes('بدي'), 'should include the Jordanian swaps');
+  ok(/[\u0600-\u06FF]/.test(p), 'should include Arabic guidance');
   ok(p.includes("assistant"), 'should identify him as an assistant');
   ok(p.includes('Never claim to be'), 'should forbid impersonating the owner');
   ok(p.includes('This call is in ARABIC'), 'should pin Arabic when asked');
@@ -347,7 +371,7 @@ await t('the call prompt carries the dialect rules and the disclosure rule', () 
 
 await t('the call prompt stays short, because length costs response time', () => {
   const p = prompts.callSystemPrompt({ goal: 'book a table for four on Friday', language: 'auto' });
-  ok(p.length < 1800, `call prompt should be under 1800 chars, is ${p.length}`);
+  ok(p.length < 2600, `call prompt should stay under 2600 chars, is ${p.length}`);
   // The long WhatsApp version must NOT leak into the call prompt.
   ok(!p.includes('Saved contacts'), 'contacts belong in the WhatsApp prompt only');
 });
@@ -355,25 +379,97 @@ await t('the call prompt stays short, because length costs response time', () =>
 await t('an English call is locked to English, with no Arabic farewell', () => {
   const p = prompts.callSystemPrompt({ goal: 'x', language: 'en' });
   ok(p.includes('This call is in ENGLISH'), 'should pin English');
-  ok(p.includes('do NOT end with an Arabic'), 'should forbid the Arabic goodbye');
-  ok(!p.includes('بدي'), 'the Arabic dialect block must not load on an English call');
+  ok(p.includes('do not end with an Arabic farewell'), 'should forbid the Arabic goodbye');
+  ok(!/[\u0600-\u06FF]/.test(p), 'Arabic guidance must not load on an English call');
 });
 
 await t('an Arabic call is locked to Arabic and told not to drift', () => {
   const p = prompts.callSystemPrompt({ goal: 'x', language: 'ar' });
   ok(p.includes('This call is in ARABIC'), 'should pin Arabic');
-  ok(p.includes('Do NOT drift into English'), 'should forbid drifting');
-  ok(p.includes('بدي'), 'the dialect block belongs on an Arabic call');
+  ok(p.includes("Don't drift to English"), 'should forbid drifting');
+  ok(!p.includes('Jordanian'), 'should no longer force the Jordanian dialect');
+  ok(/[\u0600-\u06FF]/.test(p), 'Arabic guidance belongs on an Arabic call');
 });
 
-await t('an auto call picks one language and holds it', () => {
-  const p = prompts.callSystemPrompt({ goal: 'x', language: 'auto' });
-  ok(p.includes('do not flip back'), 'should forbid flip-flopping');
+await t('a direct request to change language always wins', () => {
+  for (const lang of ['en', 'ar']) {
+    const p = prompts.callSystemPrompt({ goal: 'x', language: lang });
+    ok(p.includes('a\ndirect request beats every rule above'), `${lang}: must allow switching on request`);
+    ok(p.includes('switch at once'), `${lang}: must forbid refusing`);
+  }
 });
 
-await t('confusion is handled by asking again, not by changing language', () => {
+await t('calls default to asking the person which language they want', async () => {
+  const { runTestCall } = await import('../src/diagnostics.js');
+  const r = await runTestCall('+15551234567');
+  eq(r.language, 'ask', 'no language should mean ask, not silent multi-detection');
+});
+
+await t('an unrecognised language falls back to the default', async () => {
+  const { runTestCall } = await import('../src/diagnostics.js');
+  const r = await runTestCall('+15551234567', undefined, 'klingon');
+  eq(r.language, 'ask');
+});
+
+await t('ask mode tells him to settle the language first, then hold it', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'ask' });
+  ok(p.includes('FIRST, settle the language'), 'should make the language question the first task');
+  ok(p.includes('STAY in it'), 'should hold the choice');
+  ok(p.replace(/\s+/g, ' ').includes('then use English'), 'an unclear answer should fall back to English');
+});
+
+await t('asking for Arabic still gets Arabic', async () => {
+  const { runTestCall } = await import('../src/diagnostics.js');
+  const r = await runTestCall('+15551234567', undefined, 'ar');
+  eq(r.language, 'ar');
+});
+
+await t('confusion is handled by asking again, but a request still switches him', () => {
   const p = prompts.callSystemPrompt({ goal: 'x', language: 'ar' });
-  ok(p.includes('do NOT change language because you'), 'the drift rule must be explicit');
+  ok(p.includes("don't guess"), 'should ask rather than guess');
+  ok(p.replace(/\s+/g, ' ').includes('switch at once and stay switched'), 'a request must still switch him');
+});
+
+await t('never confuses its own name with the owner\'s', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'en', calleeName: 'Zaytinya' });
+  ok(p.includes('YOUR name is Freddie'), 'must state whose name Freddie is');
+  ok(p.includes('Never call anyone else "Freddie"'), 'must forbid calling others Freddie');
+  ok(p.includes('Call him Fadi'), 'must say what to call the owner');
+  ok(p.includes('Zaytinya'), 'must name who is actually on the call');
+});
+
+await t('answers off-topic questions instead of deflecting', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'en' });
+  ok(p.includes('TALK LIKE A PERSON'), 'should have the conversational rule');
+  ok(p.includes('Never deflect'), 'should forbid the canned deflection');
+  ok(p.includes('steer back'), 'should still return to the purpose');
+});
+
+await t('refuses to hang up before the goal is met', () => {
+  const p = prompts.callSystemPrompt({ goal: 'book a table', language: 'en' });
+  ok(p.includes("DON'T HANG UP EARLY"), 'should have the rule');
+  ok(p.includes('tangent'), 'a tangent is not a reason to leave');
+  ok(p.includes('a pause'), 'a pause is not a reason to leave');
+  ok(p.includes('confirm it back to you'), 'should confirm before leaving');
+});
+
+await t('greets the person by name when we know it', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'en', calleeName: 'Rania' });
+  ok(p.includes('Use their name — Rania'), 'should be told to use the name');
+  ok(p.includes('ask for Rania'), 'should ask for them if someone else answers');
+});
+
+await t('says nothing about names when we have none', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'en' });
+  ok(!p.includes('Use their name'), 'no name means no name instruction');
+  ok(p.includes('whoever answers'), 'should say the callee is unknown');
+});
+
+await t('the place_call tool insists on capturing the name', () => {
+  const t2 = toolDefs.toolDefinitions.find((d) => d.function.name === 'place_call');
+  const desc = t2.function.parameters.properties.callee_name.description;
+  ok(desc.includes('ALWAYS include this'), 'should push the model to pass a name');
+  ok(desc.includes('greets them by name'), 'should say why it matters');
 });
 
 await t('the WhatsApp prompt lists real contacts and calls', () => {
