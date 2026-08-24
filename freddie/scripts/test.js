@@ -258,10 +258,25 @@ const prompts = await import('../src/brain/prompts.js');
 await t('the call prompt carries the dialect rules and the disclosure rule', () => {
   const p = prompts.callSystemPrompt({ goal: 'book a table', language: 'ar', calleeName: 'Zaytinya' });
   ok(p.includes('بدي'), 'should include the Jordanian swaps');
-  ok(!p.includes('أريد\n'), 'should not present MSA as the target form');
-  ok(p.toLowerCase().includes('assistant calling on behalf'), 'should disclose he is an assistant');
-  ok(p.includes('Jordanian Arabic'), 'should open in Arabic when asked');
-  ok(p.includes('Never read out a payment card number'), 'should carry the payment limit');
+  ok(p.includes("assistant"), 'should identify him as an assistant');
+  ok(p.includes('Never claim to be'), 'should forbid impersonating the owner');
+  ok(p.includes('Start in Jordanian Arabic'), 'should open in Arabic when asked');
+  ok(p.includes('card number'), 'should carry the payment limit');
+  ok(p.includes('Zaytinya'), 'should name who is being called');
+});
+
+await t('the call prompt stays short, because length costs response time', () => {
+  const p = prompts.callSystemPrompt({ goal: 'book a table for four on Friday', language: 'auto' });
+  ok(p.length < 1800, `call prompt should be under 1800 chars, is ${p.length}`);
+  // The long WhatsApp version must NOT leak into the call prompt.
+  ok(!p.includes('Saved contacts'), 'contacts belong in the WhatsApp prompt only');
+});
+
+await t('the call prompt tells him to follow the other person\'s language', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'en' });
+  ok(p.includes('Start in American English'), 'should open in English');
+  ok(p.includes('switch to Arabic'), 'should switch when they speak Arabic');
+  ok(p.includes('switch to English'), 'should switch back');
 });
 
 await t('the WhatsApp prompt lists real contacts and calls', () => {

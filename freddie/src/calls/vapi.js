@@ -33,8 +33,22 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
   return {
     name: 'Freddie',
     firstMessageMode: 'assistant-speaks-first',
-    // He greets, then waits. Opening with the full pitch makes people hang up.
-    firstMessage: language === 'ar' ? 'ألو، مرحبا؟' : 'Hi, good afternoon.',
+
+    // A bare "hello" leaves both sides waiting for the other, which reads as a
+    // broken line. Saying who he is straight away fills the gap and gets the
+    // disclosure out of the way in the same breath.
+    firstMessage:
+      language === 'ar'
+        ? `مرحبا، أنا فريدي، مساعد ${config.owner.name}. معك دقيقة؟`
+        : `Hi, this is Freddie — I'm ${config.owner.name}'s assistant. Do you have a moment?`,
+
+    // Vapi plays fake call-centre ambience on phone calls by DEFAULT. It makes
+    // Freddie sound like a room full of telemarketers. Off.
+    backgroundSound: 'off',
+
+    // How long he waits after you stop talking before he starts. The default
+    // leaves an awkward beat; this is closer to how people actually converse.
+    startSpeakingPlan: { waitSeconds: 0.4 },
 
     model: {
       provider: 'openai',
@@ -92,7 +106,9 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
     },
     serverMessages: ['end-of-call-report', 'status-update'],
 
-    silenceTimeoutSeconds: 20,
+    // Was 20 and hung up on real pauses. People need longer than that to think,
+    // look something up, or go and check the book.
+    silenceTimeoutSeconds: 45,
     maxDurationSeconds: 600,
     endCallMessage: language === 'ar' ? 'تسلم، يعطيك العافية. مع السلامة.' : 'Great, thank you very much. Goodbye.',
   };
