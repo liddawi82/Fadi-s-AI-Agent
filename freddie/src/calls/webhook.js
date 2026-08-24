@@ -8,6 +8,7 @@ import { placeCall, isBlockedNumber } from './vapi.js';
 import { normalisePhone, isDialable } from '../config.js';
 import { sendText, reply } from '../whatsapp/send.js';
 import { summariseCall } from '../brain/agent.js';
+import { findRestaurants } from '../places.js';
 import * as memory from '../memory/store.js';
 import { log } from '../util/log.js';
 
@@ -75,6 +76,24 @@ export async function handleToolCall(message) {
         results.push({
           toolCallId: id,
           result: `Written down. You WILL ring ${args.callee_name || to} the moment this call ends. Tell them so — and do not say it has already happened.`,
+        });
+      }
+    } else if (name === 'suggest_restaurants') {
+      const found = await findRestaurants(args.location, args.cuisine);
+      if (!found.ok) {
+        results.push({ toolCallId: id, result: found.message });
+      } else {
+        const list = found.restaurants
+          .map((r) => {
+            const bits = [r.name];
+            if (r.rating) bits.push(`rated ${r.rating}${r.reviewCount ? ` (${r.reviewCount} reviews)` : ''}`);
+            if (r.address) bits.push(r.address);
+            return bits.join(' — ');
+          })
+          .join('; ');
+        results.push({
+          toolCallId: id,
+          result: `Here's what came up, best-reviewed first: ${list}. Mention a couple of these by name — don't read out addresses unless asked, and don't claim you've booked anything.`,
         });
       }
     } else {

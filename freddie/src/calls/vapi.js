@@ -154,6 +154,33 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
             },
           },
         },
+        {
+          type: 'function',
+          async: false,
+          server: {
+            url: `${config.publicUrl}/vapi/tools`,
+            ...(config.vapi.webhookSecret ? { secret: config.vapi.webhookSecret } : {}),
+          },
+          function: {
+            name: 'suggest_restaurants',
+            description:
+              "Look up well-reviewed restaurants near a location that came up on this call — use it when the goal itself is finding somewhere to eat, or the person you're talking to mentions where they are and it becomes relevant. Returns 2-3 real, well-rated places to mention by name. This only SUGGESTS places — it does not book anything.",
+            parameters: {
+              type: 'object',
+              properties: {
+                location: {
+                  type: 'string',
+                  description: 'A neighbourhood, address, landmark, or city — wherever "near" should be. Required.',
+                },
+                cuisine: {
+                  type: 'string',
+                  description: 'Optional — a type of food if one was mentioned, e.g. "Italian", "seafood".',
+                },
+              },
+              required: ['location'],
+            },
+          },
+        },
       ],
     },
 
