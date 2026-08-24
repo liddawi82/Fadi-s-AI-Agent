@@ -14,6 +14,8 @@ import { config, normalisePhone } from './config.js';
 import { placeCall } from './calls/vapi.js';
 import { log } from './util/log.js';
 
+const normaliseDigits = (p) => String(p || '').replace(/\D/g, '');
+
 export function keyIsValid(req) {
   const provided = String(req.query?.key || '');
   const expected = config.vapi.webhookSecret;
@@ -58,6 +60,34 @@ export async function runDiagnostics() {
     add('Twilio account', false, err.message);
   }
 
+  // Can Freddie actually be TOLD to do anything?
+  //
+  // Importing the number into Vapi silently claims BOTH channels — voice and
+  // messaging — so messaging ends up pointed at api.vapi.ai, and every text
+  // sent to Freddie is answered by Vapi instead of reaching this app. Nothing
+  // errors; the messages simply never arrive. Worth checking explicitly,
+  // because from the outside it looks identical to Freddie ignoring you.
+  try {
+    const client = twilio(config.twilio.accountSid, config.twilio.authToken);
+    const numbers = await client.incomingPhoneNumbers.list({ limit: 20 });
+    const line = numbers.find(
+      (n) => normaliseDigits(n.phoneNumber) === normaliseDigits(config.twilio.whatsappFrom)
+    );
+    if (!line) {
+      add('Inbound texts reach Freddie', false,
+          `${config.twilio.whatsappFrom} isn't in this Twilio account.`);
+    } else {
+      const want = `${config.publicUrl}/sms`;
+      const got = line.smsUrl || '(none)';
+      add('Inbound texts reach Freddie', got === want,
+          got === want
+            ? `messaging webhook points at ${want}`
+            : `messaging webhook points at ${got} — it must be ${want}, or your texts never arrive`);
+    }
+  } catch (err) {
+    add('Inbound texts reach Freddie', false, err.message);
+  }
+
   // ── Vapi ──────────────────────────────────────────────────────────────────
   try {
     const res = await fetch('https://api.vapi.ai/phone-number', {
@@ -97,7 +127,7 @@ export async function runDiagnostics() {
  */
 export async function runTestCall(rawTo, goalOverride, lang) {
   const to = normalisePhone(rawTo || config.owner.whatsapp);
-  const language = ['ar', 'en', 'auto'].includes(lang) ? lang : 'auto';
+  const language = ['ar', 'en', 'ask'].includes(lang) ? lang : config.vapi.defaultCallLanguage;
 
   const goal =
     goalOverride ||

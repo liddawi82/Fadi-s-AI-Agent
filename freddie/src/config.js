@@ -22,11 +22,36 @@ function int(value, fallback) {
 }
 
 /** Normalise a phone number to E.164-ish: a leading + and digits only. */
+// The country code assumed when someone says a bare local number out loud.
+// Freddie's world is mostly US, so '1' — override in Railway if that changes.
+const DEFAULT_CC = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
+
 export function normalisePhone(raw) {
   if (!raw) return '';
   const trimmed = String(raw).replace(/^whatsapp:/i, '').trim();
-  const digits = trimmed.replace(/[^\d+]/g, '');
-  return digits.startsWith('+') ? digits : `+${digits.replace(/^\+*/, '')}`;
+  const digits = trimmed.replace(/\D/g, '');
+
+  // Someone reading a number aloud on the phone almost never says the country
+  // code. Ten digits is a local number, not an E.164 one — before this,
+  // "945 900 8800" became "+9459008800", which Vapi rejects outright. This
+  // holds even when a '+' was typed, because a stray '+' in front of a local
+  // number is exactly the mistake that produced that bug.
+  if (digits.length === 10) return `+${DEFAULT_CC}${digits}`;
+  if (DEFAULT_CC === '1' && digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+
+  return `+${digits}`;
+}
+
+/**
+ * Is this something a phone network will actually accept?
+ *
+ * E.164: a leading '+', a country code that doesn't start with 0, and 8 to 15
+ * digits in total. Worth checking explicitly, because the failure mode without
+ * it is the worst kind — Freddie promises someone he'll ring them, hangs up,
+ * and the call dies silently on a malformed number.
+ */
+export function isDialable(phone) {
+  return /^\+[1-9]\d{7,14}$/.test(String(phone || ''));
 }
 
 export function loadConfig() {
@@ -71,7 +96,15 @@ export function loadConfig() {
       voiceModel: process.env.VAPI_VOICE_MODEL || 'eleven_flash_v2_5',
       transcriberProvider: process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram',
       transcriberModel: process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
-      transcriberLanguage: process.env.VAPI_TRANSCRIBER_LANGUAGE || 'multi',
+      transcriberLanguage: process.env.VAPI_TRANSCRIBER_LANGUAGE || 'en',
+
+      // The language calls use unless one is named explicitly. English by
+      // default because dialectal Arabic transcription is measurably weaker —
+      // set this to 'ar' in Railway if that ever stops being true.
+      // 'ask'  — open bilingually, let the person choose, then hold it (default)
+      // 'en'   — English only
+      // 'ar'   — Arabic only
+      defaultCallLanguage: process.env.DEFAULT_CALL_LANGUAGE || 'ask',
     },
     places: {
       apiKey: process.env.GOOGLE_PLACES_API_KEY || '',
