@@ -35,6 +35,7 @@ export async function think(text) {
         contacts: memory.listContacts(),
         recentCalls: memory.recentCalls(6),
         prefs: memory.preferences(),
+        requireConfirmation: config.behaviour.requireConfirmation,
       }),
     },
     ...memory.conversationHistory(),
