@@ -88,29 +88,43 @@ export async function runDiagnostics() {
   };
 }
 
-/** Place a real call, and report exactly what happened either way. */
-export async function runTestCall(rawTo, goalOverride) {
+/**
+ * Place a real call, and report exactly what happened either way.
+ *
+ * The default is a genuine conversation with the owner, not a canned test — an
+ * earlier version told Freddie to "keep it under a minute and end the call",
+ * which he dutifully obeyed, hanging up while you were still talking to him.
+ */
+export async function runTestCall(rawTo, goalOverride, lang) {
   const to = normalisePhone(rawTo || config.owner.whatsapp);
+  const language = ['ar', 'en', 'auto'].includes(lang) ? lang : 'auto';
 
   const goal =
     goalOverride ||
-    `This is a test call. Greet them warmly, say you're Freddie, ${config.owner.name}'s assistant, ` +
-    `and that this is a test to check you sound alright. Ask them how the line sounds and whether ` +
-    `they can understand you clearly. If they answer in Arabic, switch to Jordanian Arabic and keep ` +
-    `going. Keep it under a minute, thank them, and end the call.`;
+    `You are calling ${config.owner.name} himself — your owner, not a stranger.
+He wants to talk to you directly: to hear how you sound, to try you in Arabic
+and English, and possibly to give you instructions.
 
-  log.info(`Test call requested to ${to}`);
+Have a real conversation. Answer whatever he asks. If he gives you a task,
+acknowledge it clearly and tell him you'll handle it after the call.
+
+Do NOT rush. Do NOT end the call yourself unless he says goodbye or asks you to
+hang up. If he goes quiet, wait — he may be thinking. This call has no time
+limit and no agenda beyond talking with him.`;
+
+  log.info(`Test call requested to ${to} (language: ${language})`);
 
   try {
-    const call = await placeCall({ to, goal, language: 'auto', calleeName: 'test call' });
+    const call = await placeCall({ to, goal, language, calleeName: config.owner.name });
     return {
       ok: true,
       callId: call.id,
       to,
-      message: `Calling ${to} now — your phone should ring within a few seconds.`,
+      language,
+      message: `Calling ${to} now — your phone should ring within a few seconds. Talk to him properly; he won't hang up on you.`,
     };
   } catch (err) {
-    return { ok: false, to, error: err.message };
+    return { ok: false, to, language, error: err.message };
   }
 }
 

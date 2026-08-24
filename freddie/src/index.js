@@ -60,7 +60,7 @@ app.get('/diagnose', async (req, res) => {
 app.get('/test-call', async (req, res) => {
   if (!keyIsValid(req)) return res.status(401).type('text').send('Wrong or missing ?key=');
   try {
-    const result = await runTestCall(req.query.to, req.query.goal);
+    const result = await runTestCall(req.query.to, req.query.goal, req.query.lang);
     if (req.query.format === 'json') return res.json(result);
     res.type('text/html').send(renderPage(result.ok ? 'Calling you now' : 'The call failed', result));
   } catch (err) {

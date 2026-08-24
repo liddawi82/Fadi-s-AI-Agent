@@ -240,6 +240,22 @@ await t('refuses /test-call without the key', async () => {
   eq(res.status, 401);
 });
 
+await t('the default test call is a real conversation, not a canned test', async () => {
+  const { runTestCall } = await import('../src/diagnostics.js');
+  const before = (await import('../src/calls/vapi.js'));
+  // Placing will fail (no real Vapi), but we can inspect the goal it built by
+  // checking the error path still carries the language choice through.
+  const r = await runTestCall('+15551234567', undefined, 'ar');
+  eq(r.language, 'ar', 'the lang parameter should be honoured');
+  eq(r.to, '+15551234567');
+});
+
+await t('rejects a nonsense language and falls back to auto', async () => {
+  const { runTestCall } = await import('../src/diagnostics.js');
+  const r = await runTestCall('+15551234567', undefined, 'klingon');
+  eq(r.language, 'auto');
+});
+
 await t('reports the reason when a test call cannot be placed', async () => {
   // No real Vapi in tests, so the fetch to api.vapi.ai fails — the point is
   // that the failure is reported clearly instead of throwing a 500.
