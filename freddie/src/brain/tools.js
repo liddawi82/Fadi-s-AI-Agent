@@ -1,7 +1,7 @@
 // The things Freddie can actually do. Each tool is a description the model
 // reads, plus a function that runs when it decides to use one.
 
-import { config, normalisePhone } from '../config.js';
+import { config, normalisePhone, isDialable } from '../config.js';
 import { placeCall, getCallStatus, isBlockedNumber } from '../calls/vapi.js';
 import * as memory from '../memory/store.js';
 import { log } from '../util/log.js';
@@ -28,10 +28,15 @@ export const toolDefinitions = [
           },
           language: {
             type: 'string',
-            enum: ['en', 'ar', 'auto'],
-            description: "Language to open in. 'ar' for Jordanian Arabic, 'en' for American English.",
+            enum: ['en', 'ar', 'ask'],
+            description:
+              "'en' for English, 'ar' for Arabic, 'ask' to open bilingually and let them choose. Omit unless he told you which language they speak.",
           },
-          callee_name: { type: 'string', description: 'Who or what is being called, for the log.' },
+          callee_name: {
+            type: 'string',
+            description:
+              "Who is being called — the person's name, or the business name. ALWAYS include this when it is known: Freddie greets them by name, which is what makes the call sound like a real assistant rather than a robocall.",
+          },
           constraints: {
             type: 'string',
             description: 'Anything Freddie must not agree to. Optional but useful.',
@@ -173,8 +178,19 @@ async function findPlace(query) {
 async function doPlaceCall(args) {
   const to = normalisePhone(args.to);
 
+  // Blocked first — emergency numbers are short, so they would otherwise be
+  // refused as "not dialable", which hides the real reason.
   if (isBlockedNumber(to)) {
     return { ok: false, message: 'That is an emergency or crisis line. I will not call it.' };
+  }
+
+  if (!isDialable(to)) {
+    return {
+      ok: false,
+      message:
+        `"${args.to}" isn't a dialable number. Ask him for it in full, with the area or ` +
+        `country code. Don't guess the missing digits.`,
+    };
   }
 
   const used = memory.callsToday();
