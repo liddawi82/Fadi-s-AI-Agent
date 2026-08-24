@@ -37,6 +37,19 @@ export function detectReplyLanguage(text) {
   return 'en'; // includes empty, numbers-only, or punctuation-only messages
 }
 
+// Backstop for a bug that two prompt-only fixes failed to stop: the model
+// sometimes answers "Calling you now, Fadi..." (or similar) WITHOUT ever
+// having invoked place_call in that same turn. Root cause — persisted history
+// only stores {role, content}, never tool-call detail (see store.js), so the
+// model's own past fake replies look, in its own context, exactly like real
+// ones that happened to skip the tool. That teaches it, via plain pattern
+// imitation, to keep skipping it. A prompt instruction competes with that
+// pattern and can lose; this check doesn't compete — it inspects what
+// actually happened this turn and refuses to let a false claim through
+// regardless of why the model produced it.
+const FAKE_CALLING_CLAIM_RE =
+  /\b(calling you now|i['’]?m calling|the line is ringing|dialling|dialing)\b|عم\s*أتصل|رح\s*أتصل|جاري\s*الاتصال|بتصل\s*فيك/i;
+
 /**
  * Handle one message from the owner.
  * @param {string} text what he said (typed, or transcribed from a voice note)
@@ -75,6 +88,11 @@ export async function think(text) {
     content: `Reminder, decided in code from his latest message, not by you: your next reply to him must be written in ${languageLabel}. This overrides any pull from the Arabic (or English) replies earlier in this conversation.`,
   };
 
+  // True once place_call has actually been invoked (and returned) at any
+  // point in this turn. Checked below before any no-tool-calls answer is
+  // allowed to claim a call happened.
+  let calledPlaceCallThisTurn = false;
+
   for (let step = 0; step < MAX_STEPS; step++) {
     let response;
     try {
@@ -101,11 +119,28 @@ export async function think(text) {
     const calls = choice.tool_calls || [];
     if (calls.length === 0) {
       const answer = (choice.content || '').trim() || 'Done.';
+
+      if (!calledPlaceCallThisTurn && FAKE_CALLING_CLAIM_RE.test(answer)) {
+        log.warn(`Blocked a "calling you now"-style reply with no place_call this turn: "${answer.slice(0, 120)}"`);
+        messages.push({
+          role: 'system',
+          content:
+            "That answer claims a call is happening, but place_call was never invoked this turn — that would be false. " +
+            "If you have what you need (who to call and what for), call place_call right now, then report what it returned. " +
+            "If you don't have enough to place the call yet, ask him for what's missing instead of saying you're calling.",
+        });
+        continue; // give the model another step to either really call or rewrite honestly
+      }
+
       memory.appendTurn('assistant', answer);
       return answer;
     }
 
     // Run every tool the model asked for, in parallel where it asked for several.
+    if (calls.some((call) => call.function.name === 'place_call')) {
+      calledPlaceCallThisTurn = true;
+    }
+
     const results = await Promise.all(
       calls.map(async (call) => {
         let args = {};
