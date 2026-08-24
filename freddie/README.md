@@ -1,8 +1,12 @@
 # Freddie
 
-A bilingual assistant with his own phone number. You text or send him a voice
-note on WhatsApp — in Jordanian Arabic or American English — and he places the
-call, talks to a real person, and reports back.
+A bilingual assistant with his own phone number. Message him on **WhatsApp or
+SMS** — in Jordanian Arabic or American English, typed or as a voice note — and
+he places the call, talks to a real person, and reports back.
+
+He answers on whichever channel you used. Text him and he texts back; WhatsApp
+him and he replies there, with a voice note if you sent one. Call reports go to
+the channel you last messaged from, even if the call ends minutes later.
 
 If something goes wrong on the call that only you can decide, he messages you
 while still holding the line.
@@ -122,10 +126,19 @@ contacts every time you deploy a change.
 
 ### Twilio → Freddie
 
-1. Twilio Console → **Messaging → Try it out → Send a WhatsApp message**.
-2. Open the **Sandbox settings** tab.
-3. In **When a message comes in**, paste `https://your-railway-url/whatsapp`,
-   method **POST**. Save.
+Freddie accepts both channels at two paths that behave identically:
+
+| Channel | Webhook URL |
+|---|---|
+| WhatsApp | `https://your-railway-url/whatsapp` |
+| SMS | `https://your-railway-url/sms` |
+
+**On a trial account** (Try out SMS / Try out WhatsApp pages): select
+**Inbound**, set Auto-Reply settings to **Custom**, paste the URL, method
+**POST**, Save. Do it on both pages to enable both channels.
+
+**On an upgraded account**: Messaging → Settings → the sender's configuration,
+in the **When a message comes in** field.
 
 ### Vapi → Freddie
 
@@ -197,7 +210,7 @@ place to look.
 |---|---|
 | `REQUIRE_CONFIRMATION` | `false` lets him dial without asking you first |
 | `MAX_CALLS_PER_DAY` | Hard ceiling. Default 15 |
-| `VOICE_REPLIES` | `false` for text-only replies |
+| `VOICE_REPLIES` | `false` for text-only replies. WhatsApp only — SMS always gets text |
 | `OPENAI_TTS_VOICE` | `onyx`, `alloy`, `echo`, `fable`, `nova`, `shimmer` |
 | `ELEVENLABS_VOICE_ID` | The voice he uses on the phone |
 

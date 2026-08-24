@@ -144,15 +144,18 @@ await t('answers /health with its real state', async () => {
   eq(body.whatsappFrom, '+14155238886');
 });
 
-await t('rejects a WhatsApp webhook with no Twilio signature', async () => {
-  const res = await fetch(`${base}/whatsapp`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ From: 'whatsapp:+15551234567', Body: 'call someone' }),
-  });
-  // Twilio always gets 200 so it doesn't retry; the rejection is internal.
-  eq(res.status, 200);
-  ok((await res.text()).includes('<Response>'), 'should return empty TwiML');
+await t('rejects a webhook with no Twilio signature, on both paths', async () => {
+  for (const path of ['/whatsapp', '/sms']) {
+    const res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ From: 'whatsapp:+15551234567', Body: 'call someone' }),
+    });
+    // Twilio always gets 200 so it doesn't retry; the rejection is internal.
+    eq(res.status, 200, `${path} should return 200`);
+    const text = await res.text();
+    ok(!text.includes('<Response>'), `${path} must not return TwiML — trial accounts reject it`);
+  }
 });
 
 await t('rejects a Vapi request with the wrong secret', async () => {
@@ -246,6 +249,43 @@ await t('acts on a message from the owner and replies', async () => {
   ok(sentMessages.length > before, 'Freddie should reply to his owner');
   eq(sentMessages.at(-1).body, 'On it — calling now.');
   eq(sentMessages.at(-1).to, 'whatsapp:+15551234567');
+});
+
+console.log('\nchannels');
+const chan = await import('../src/channel.js');
+
+await t('tells WhatsApp and SMS apart from the From field', () => {
+  eq(chan.detectChannel('whatsapp:+15551234567'), 'whatsapp');
+  eq(chan.detectChannel('+15551234567'), 'sms');
+  eq(chan.detectChannel(''), 'sms');
+});
+
+await t('addresses each channel the way Twilio expects', () => {
+  eq(chan.addressFor('+15551234567', 'whatsapp'), 'whatsapp:+15551234567');
+  eq(chan.addressFor('+15551234567', 'sms'), '+15551234567');
+});
+
+await t('replies over SMS when the message arrived by SMS', async () => {
+  const before = sentMessages.length;
+  openaiStub.__setNextCompletion({
+    choices: [{ message: { role: 'assistant', content: 'Got it.' } }],
+  });
+  await handleInbound({ From: '+15551234567', Body: 'book a table', NumMedia: '0' });
+  ok(sentMessages.length > before, 'should have replied');
+  const sent = sentMessages.at(-1);
+  eq(sent.to, '+15551234567', 'SMS reply must not carry a whatsapp: prefix');
+  eq(sent.from, '+14155238886');
+  eq(chan.currentChannel(), 'sms');
+});
+
+await t('switches back to WhatsApp when the next message arrives there', async () => {
+  openaiStub.__setNextCompletion({
+    choices: [{ message: { role: 'assistant', content: 'Sure.' } }],
+  });
+  await handleInbound({ From: 'whatsapp:+15551234567', Body: 'hello', NumMedia: '0' });
+  const sent = sentMessages.at(-1);
+  eq(sent.to, 'whatsapp:+15551234567', 'WhatsApp reply needs the prefix');
+  eq(chan.currentChannel(), 'whatsapp');
 });
 
 console.log('\nreasoning loop');

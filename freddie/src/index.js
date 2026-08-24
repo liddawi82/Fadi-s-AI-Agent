@@ -52,18 +52,29 @@ function twilioIsGenuine(req) {
   return twilio.validateRequest(config.twilio.authToken, signature, url, req.body);
 }
 
-app.post('/whatsapp', (req, res) => {
-  // Answer Twilio immediately. Thinking and calling take far longer than the
-  // 15 seconds Twilio allows, so the work happens after the response.
-  res.type('text/xml').send('<Response></Response>');
+function receiveMessage(req, res) {
+  // Answer Twilio immediately with an empty 200. Thinking and calling take far
+  // longer than the 15 seconds Twilio allows, so the work happens afterwards.
+  //
+  // Deliberately NOT TwiML: trial accounts don't accept a TwiML response body,
+  // and Freddie sends his replies through the REST API anyway.
+  res.status(200).type('text/plain').send('');
 
   if (!twilioIsGenuine(req)) {
-    log.warn('Rejected a /whatsapp request with a bad or missing Twilio signature.');
+    log.warn(`Rejected a ${req.originalUrl} request with a bad or missing Twilio signature.`);
     return;
   }
 
-  handleInbound(req.body).catch((err) => log.error('Inbound handling failed:', err.stack || err.message));
-});
+  handleInbound(req.body).catch((err) =>
+    log.error('Inbound handling failed:', err.stack || err.message)
+  );
+}
+
+// Both paths do the same thing. Freddie works over WhatsApp and SMS, and
+// answers on whichever one you messaged him from — the two names just make the
+// Twilio console easier to reason about.
+app.post('/whatsapp', receiveMessage);
+app.post('/sms', receiveMessage);
 
 // ── Vapi ────────────────────────────────────────────────────────────────────
 
