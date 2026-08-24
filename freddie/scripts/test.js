@@ -201,6 +201,56 @@ await t('holds a mid-call tool request open, then answers it', async () => {
   ok(body.results[0].result.includes('booth please'), 'the answer should reach Freddie');
 });
 
+// ── diagnostics endpoints ───────────────────────────────────────────────────
+console.log('\ndiagnostics');
+
+await t('refuses /diagnose without the key', async () => {
+  const res = await fetch(`${base}/diagnose`);
+  eq(res.status, 401);
+});
+
+await t('refuses /diagnose with the wrong key', async () => {
+  const res = await fetch(`${base}/diagnose?key=nope`);
+  eq(res.status, 401);
+});
+
+await t('runs /diagnose with the right key and names each check', async () => {
+  const res = await fetch(`${base}/diagnose?key=secret123&format=json`);
+  eq(res.status, 200);
+  const body = await res.json();
+  const names = body.checks.map((c) => c.name);
+  ok(names.includes('OpenAI'), 'should check OpenAI');
+  ok(names.includes('Twilio account'), 'should check Twilio');
+  ok(names.includes('Public URL'), 'should check the public URL');
+  const twilioCheck = body.checks.find((c) => c.name === 'Twilio account');
+  ok(twilioCheck.detail.includes('canned templates'),
+     'a trial account should be flagged as unable to send custom text');
+});
+
+await t('renders /diagnose as a readable page, not raw JSON', async () => {
+  const res = await fetch(`${base}/diagnose?key=secret123`);
+  const html = await res.text();
+  ok(html.includes('<table>'), 'should render a table');
+  ok(html.includes('Freddie'), 'should be titled');
+  ok(!html.includes('secret123'), 'must never echo the key back into the page');
+});
+
+await t('refuses /test-call without the key', async () => {
+  const res = await fetch(`${base}/test-call?to=%2B15551234567`);
+  eq(res.status, 401);
+});
+
+await t('reports the reason when a test call cannot be placed', async () => {
+  // No real Vapi in tests, so the fetch to api.vapi.ai fails — the point is
+  // that the failure is reported clearly instead of throwing a 500.
+  const res = await fetch(`${base}/test-call?key=secret123&to=%2B15551234567&format=json`);
+  eq(res.status, 200);
+  const body = await res.json();
+  eq(body.ok, false);
+  ok(body.error, 'should explain what went wrong');
+  eq(body.to, '+15551234567');
+});
+
 // ── prompts ─────────────────────────────────────────────────────────────────
 console.log('\nprompts');
 const prompts = await import('../src/brain/prompts.js');

@@ -62,6 +62,16 @@ export function loadConfig() {
       apiKey: process.env.VAPI_API_KEY,
       phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID || '',
       webhookSecret: process.env.VAPI_WEBHOOK_SECRET || '',
+
+      // Voice and transcription are settable from Railway so they can be
+      // changed without touching the code. If Vapi rejects a voice or a
+      // transcriber, swap the value here and redeploy — no re-upload needed.
+      voiceProvider: process.env.VAPI_VOICE_PROVIDER || '11labs',
+      voiceId: process.env.VAPI_VOICE_ID || 'burt',
+      voiceModel: process.env.VAPI_VOICE_MODEL || 'eleven_flash_v2_5',
+      transcriberProvider: process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram',
+      transcriberModel: process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
+      transcriberLanguage: process.env.VAPI_TRANSCRIBER_LANGUAGE || 'multi',
     },
     places: {
       apiKey: process.env.GOOGLE_PLACES_API_KEY || '',

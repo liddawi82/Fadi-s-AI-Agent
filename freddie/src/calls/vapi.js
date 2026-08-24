@@ -71,17 +71,15 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
     // Multilingual transcription so he can follow a switch between Arabic and
     // English partway through a sentence.
     transcriber: {
-      provider: 'deepgram',
-      model: 'nova-3',
-      language: 'multi',
+      provider: config.vapi.transcriberProvider,
+      model: config.vapi.transcriberModel,
+      language: config.vapi.transcriberLanguage,
     },
 
     voice: {
-      provider: '11labs',
-      voiceId: process.env.ELEVENLABS_VOICE_ID || 'burt',
-      model: 'eleven_flash_v2_5',
-      stability: 0.5,
-      similarityBoost: 0.75,
+      provider: config.vapi.voiceProvider,
+      voiceId: config.vapi.voiceId,
+      model: config.vapi.voiceModel,
     },
 
     // Recording off by default: several US states require every party to

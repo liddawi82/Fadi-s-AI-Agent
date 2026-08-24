@@ -13,6 +13,7 @@ import twilio from 'twilio';
 import { config } from './config.js';
 import { handleInbound } from './whatsapp/inbound.js';
 import { handleToolCall, handleVapiEvent, verifyVapi } from './calls/webhook.js';
+import { keyIsValid, runDiagnostics, runTestCall, renderPage } from './diagnostics.js';
 import { log } from './util/log.js';
 
 const app = express();
@@ -39,7 +40,36 @@ app.get('/health', (_req, res) => {
   });
 });
 
-// ── WhatsApp ────────────────────────────────────────────────────────────────
+// ── diagnostics you can drive from a browser ────────────────────────────────
+//
+// These exist because while Twilio blocks Freddie's outbound texts, you have no
+// other way to see what he's doing. Both need ?key=<VAPI_WEBHOOK_SECRET>.
+
+app.get('/diagnose', async (req, res) => {
+  if (!keyIsValid(req)) return res.status(401).type('text').send('Wrong or missing ?key=');
+  try {
+    const result = await runDiagnostics();
+    if (req.query.format === 'json') return res.json(result);
+    res.type('text/html').send(renderPage('Diagnostics', result));
+  } catch (err) {
+    log.error('Diagnostics failed:', err.stack || err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/test-call', async (req, res) => {
+  if (!keyIsValid(req)) return res.status(401).type('text').send('Wrong or missing ?key=');
+  try {
+    const result = await runTestCall(req.query.to, req.query.goal);
+    if (req.query.format === 'json') return res.json(result);
+    res.type('text/html').send(renderPage(result.ok ? 'Calling you now' : 'The call failed', result));
+  } catch (err) {
+    log.error('Test call failed:', err.stack || err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── WhatsApp and SMS ────────────────────────────────────────────────────────
 
 /**
  * Confirms the request really came from Twilio. Without this, anyone who finds
