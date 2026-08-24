@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { askAndWait } from './pending.js';
 import { noteTask, drainTasks } from './tasks.js';
 import { placeCall, isBlockedNumber } from './vapi.js';
-import { normalisePhone } from '../config.js';
+import { normalisePhone, isDialable } from '../config.js';
 import { sendText, reply } from '../whatsapp/send.js';
 import { summariseCall } from '../brain/agent.js';
 import * as memory from '../memory/store.js';
@@ -53,13 +53,18 @@ export async function handleToolCall(message) {
       });
     } else if (name === 'note_task') {
       const to = normalisePhone(args.to || '');
-      if (!to || to.replace(/\D/g, '').length < 7) {
+      // Blocked first: an emergency number is short, so it would otherwise trip
+      // the dialable check and get refused for the wrong, less clear reason.
+      if (isBlockedNumber(to)) {
+        results.push({ toolCallId: id, result: 'That is an emergency line. Refuse, and say why.' });
+      } else if (!isDialable(to)) {
         results.push({
           toolCallId: id,
-          result: "That isn't a usable phone number. Ask them for the full number, and do not claim you'll call until you have it.",
+          result:
+            `"${args.to}" isn't a usable phone number — no network will accept it. Read it ` +
+            `back to them digit by digit and get the whole thing, including the area or ` +
+            `country code. Do NOT say you will call anyone until you have one that checks out.`,
         });
-      } else if (isBlockedNumber(to)) {
-        results.push({ toolCallId: id, result: 'That is an emergency line. Refuse, and say why.' });
       } else {
         noteTask(message?.call?.id, {
           to,
