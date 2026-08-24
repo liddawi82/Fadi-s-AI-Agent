@@ -88,12 +88,13 @@ export async function handleToolCall(message) {
             const bits = [r.name];
             if (r.rating) bits.push(`rated ${r.rating}${r.reviewCount ? ` (${r.reviewCount} reviews)` : ''}`);
             if (r.address) bits.push(r.address);
+            bits.push(r.phone ? `phone: ${r.phone}` : 'no phone number on file');
             return bits.join(' — ');
           })
           .join('; ');
         results.push({
           toolCallId: id,
-          result: `Here's what came up, best-reviewed first: ${list}. Mention a couple of these by name — don't read out addresses unless asked, and don't claim you've booked anything.`,
+          result: `Here's what came up, best-reviewed first: ${list}. Mention a couple of these by name — don't read out addresses or numbers unless asked, and don't claim you've booked anything. If asked to book one, use note_task with the phone number shown above (only if one is listed) — you cannot dial while on this line.`,
         });
       }
     } else {
