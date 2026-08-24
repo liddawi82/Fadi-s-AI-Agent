@@ -37,18 +37,64 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
     // A bare "hello" leaves both sides waiting for the other, which reads as a
     // broken line. Saying who he is straight away fills the gap and gets the
     // disclosure out of the way in the same breath.
-    firstMessage:
-      language === 'ar'
-        ? `مرحبا، أنا فريدي، مساعد ${config.owner.name}. معك دقيقة؟`
-        : `Hi, this is Freddie — I'm ${config.owner.name}'s assistant. Do you have a moment?`,
+    // Greet them by name when we know it. Being addressed by name is the
+    // difference between sounding like a robocall and sounding like someone
+    // who was actually asked to ring you.
+    firstMessage: (() => {
+      const owner = config.owner.name;
+      const name = (calleeName || '').trim();
+
+      if (language === 'ask') {
+        return (
+          (name ? `Hi, is that ${name}? ` : 'Hi there. ') +
+          `This is Freddie, ${owner}'s assistant. Would you prefer English or Arabic? ... ` +
+          (name ? `مرحبا، معي ${name}؟ ` : 'مرحبا. ') +
+          `أنا فريدي مساعد ${owner}. تفضّل الإنجليزية أم العربية؟`
+        );
+      }
+      if (language === 'ar') {
+        return name
+          ? `مرحبا، معي ${name}؟ أنا فريدي، مساعد ${owner}. معك دقيقة؟`
+          : `مرحبا، أنا فريدي، مساعد ${owner}. معك دقيقة؟`;
+      }
+      return name
+        ? `Hi, is that ${name}? This is Freddie, ${owner}'s assistant. Do you have a moment?`
+        : `Hi, this is Freddie — I'm ${owner}'s assistant. Do you have a moment?`;
+    })(),
 
     // Vapi plays fake call-centre ambience on phone calls by DEFAULT. It makes
     // Freddie sound like a room full of telemarketers. Off.
     backgroundSound: 'off',
 
-    // How long he waits after you stop talking before he starts. The default
-    // leaves an awkward beat; this is closer to how people actually converse.
-    startSpeakingPlan: { waitSeconds: 0.4 },
+    // How long he waits after you stop talking before he starts, PLUS how he
+    // decides you're actually done. Without smartEndpointingPlan, Vapi falls
+    // back to a flat silence timer — on a real phone line (breathing, filler
+    // sounds, a beat while someone thinks) that reads either as Freddie going
+    // silent until you prompt him, or as him jumping in mid-thought. The
+    // 'vapi' provider reads the transcript itself to judge a real end-of-turn,
+    // and it's the one Vapi recommends for non-English conversations, which
+    // matters here since calls can run in Arabic.
+    startSpeakingPlan: {
+      waitSeconds: 0.4,
+      smartEndpointingPlan: { provider: 'vapi' },
+    },
+
+    // Without this, ANY sound while Freddie is talking — a breath, static, a
+    // stray "uh" — counts as an interruption (the default is 0 words). He
+    // stops mid-sentence, then restarts from the top a second later, which is
+    // exactly what "repeats himself" looks like from the other end. Requiring
+    // a couple of real words before he yields, and treating short
+    // acknowledgements as backchannel rather than a turn, fixes that without
+    // making him slow to yield when someone genuinely interrupts.
+    stopSpeakingPlan: {
+      numWords: 2,
+      voiceSeconds: 0.2,
+      backoffSeconds: 1,
+      acknowledgementPhrases: [
+        'okay', 'ok', 'right', 'uh-huh', 'mm-hmm', 'yeah', 'yes', 'sure', 'got it', 'i see',
+        'تمام', 'ايوا', 'اه', 'اوك', 'مممم',
+      ],
+    },
 
     model: {
       provider: 'openai',
@@ -102,7 +148,7 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
                   description: 'What that call must achieve, in enough detail to act on without you.',
                 },
                 callee_name: { type: 'string', description: 'Who is being called.' },
-                language: { type: 'string', enum: ['en', 'ar', 'auto'] },
+                language: { type: 'string', enum: ['en', 'ar', 'ask'] },
               },
               required: ['to', 'goal'],
             },
@@ -124,6 +170,9 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
       language:
         language === 'ar' ? 'ar'
         : language === 'en' ? 'en'
+        // 'ask' has to listen for an answer in either language, so this is the
+        // one case where multi-language detection genuinely earns its place.
+        : language === 'ask' ? 'multi'
         : config.vapi.transcriberLanguage,
     },
 
@@ -159,7 +208,11 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
  * Place an outbound call.
  * @returns {Promise<{id: string}>} the Vapi call record
  */
-export async function placeCall({ to, goal, language = 'auto', calleeName = '', constraints = '' }) {
+export async function placeCall({ to, goal, language, calleeName = '', constraints = '' }) {
+  // No language given, or 'auto'? Use the configured default rather than
+  // multi-language detection, which flip-flops and lands on the wrong one.
+  if (!language || language === 'auto') language = config.vapi.defaultCallLanguage;
+  if (!['en', 'ar', 'ask'].includes(language)) language = 'en';
   if (!config.vapi.phoneNumberId) {
     throw new Error(
       'VAPI_PHONE_NUMBER_ID is not set, so Freddie has no line to call out on. ' +
