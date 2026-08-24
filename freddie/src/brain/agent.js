@@ -11,6 +11,15 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 const MAX_STEPS = 6; // tool rounds before he must answer with words
 
+// GPT-5-family "reasoning" models refuse to mix function tools with their
+// default reasoning effort on the plain chat.completions endpoint — OpenAI's
+// own fix is to pass reasoning_effort: 'none' when tools are in play. Without
+// this, every single tool call (place_call, note_task, everything Freddie
+// actually DOES) fails outright and he answers with the generic error line.
+export function needsReasoningEffortNone(model) {
+  return /^gpt-5/.test(String(model || ''));
+}
+
 /**
  * Handle one message from the owner.
  * @param {string} text what he said (typed, or transcribed from a voice note)
@@ -39,6 +48,7 @@ export async function think(text) {
         messages,
         tools: toolDefinitions,
         temperature: 0.5,
+        ...(needsReasoningEffortNone(config.openai.model) ? { reasoning_effort: 'none' } : {}),
       });
     } catch (err) {
       log.error('The model call failed:', err.message);
