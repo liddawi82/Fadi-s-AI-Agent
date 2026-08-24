@@ -82,7 +82,12 @@ export async function think(text) {
         model: config.openai.model,
         messages: [...messages, languageReminder],
         tools: toolDefinitions,
-        temperature: 0.5,
+        // Lower than a typical chat temperature on purpose: deciding whether
+        // to actually call place_call is a decide-and-execute step, not
+        // creative writing, and this was seen to sometimes skip the tool call
+        // and just claim "calling you now" in its place — less randomness
+        // here makes that kind of skip less likely.
+        temperature: 0.3,
         ...(needsReasoningEffortNone(config.openai.model) ? { reasoning_effort: 'none' } : {}),
       });
     } catch (err) {
