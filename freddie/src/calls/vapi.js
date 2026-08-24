@@ -44,14 +44,6 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
       const owner = config.owner.name;
       const name = (calleeName || '').trim();
 
-      if (language === 'ask') {
-        return (
-          (name ? `Hi, is that ${name}? ` : 'Hi there. ') +
-          `This is Freddie, ${owner}'s assistant. Would you prefer English or Arabic? ... ` +
-          (name ? `مرحبا، معي ${name}؟ ` : 'مرحبا. ') +
-          `أنا فريدي مساعد ${owner}. تفضّل الإنجليزية أم العربية؟`
-        );
-      }
       if (language === 'ar') {
         return name
           ? `مرحبا، معي ${name}؟ أنا فريدي، مساعد ${owner}. معك دقيقة؟`
@@ -148,7 +140,7 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
                   description: 'What that call must achieve, in enough detail to act on without you.',
                 },
                 callee_name: { type: 'string', description: 'Who is being called.' },
-                language: { type: 'string', enum: ['en', 'ar', 'ask'] },
+                language: { type: 'string', enum: ['en', 'ar'], description: "Omit for English (default). 'ar' only if you know they speak Arabic." },
               },
               required: ['to', 'goal'],
             },
@@ -184,23 +176,15 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
       ],
     },
 
-    // Pin the transcriber to the call's language wherever we know it.
-    //
-    // Leaving it on 'multi' sounds appealing but is measurably worse: the
+    // Pin the transcriber to the call's language. Every call now runs in a
+    // single, known language (no more bilingual "ask" mode), so a pinned
+    // value is always correct and always more accurate than 'multi' — the
     // detector re-decides constantly, so a Jordanian speaker gets transcribed
     // as garbled English, Freddie answers in English, and the call drifts.
-    // A pinned language is far more accurate. 'multi' is only used when we
-    // genuinely don't know who's answering.
     transcriber: {
       provider: config.vapi.transcriberProvider,
       model: config.vapi.transcriberModel,
-      language:
-        language === 'ar' ? 'ar'
-        : language === 'en' ? 'en'
-        // 'ask' has to listen for an answer in either language, so this is the
-        // one case where multi-language detection genuinely earns its place.
-        : language === 'ask' ? 'multi'
-        : config.vapi.transcriberLanguage,
+      language: language === 'ar' ? 'ar' : 'en',
     },
 
     voice: {
@@ -236,10 +220,10 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
  * @returns {Promise<{id: string}>} the Vapi call record
  */
 export async function placeCall({ to, goal, language, calleeName = '', constraints = '' }) {
-  // No language given, or 'auto'? Use the configured default rather than
-  // multi-language detection, which flip-flops and lands on the wrong one.
+  // No language given, or 'auto'? Use the configured default (English,
+  // unless Railway is set to default to Arabic) rather than guessing.
   if (!language || language === 'auto') language = config.vapi.defaultCallLanguage;
-  if (!['en', 'ar', 'ask'].includes(language)) language = 'en';
+  if (!['en', 'ar'].includes(language)) language = 'en';
   if (!config.vapi.phoneNumberId) {
     throw new Error(
       'VAPI_PHONE_NUMBER_ID is not set, so Freddie has no line to call out on. ' +
@@ -279,6 +263,11 @@ export async function placeCall({ to, goal, language, calleeName = '', constrain
 
   const call = JSON.parse(text);
   log.ok(`Calling ${to} — Vapi call ${call.id}`);
+  // Not part of Vapi's response — attached so callers can record the language
+  // that was actually resolved and used (after the 'auto'/default fallback
+  // above), rather than having to guess it again later from the call's goal
+  // text, which doesn't reliably reflect what language the call ran in.
+  call.language = language;
   return call;
 }
 

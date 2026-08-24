@@ -122,7 +122,11 @@ export async function handleEndOfCall(message) {
     transcript,
     summary,
     endedReason,
-    language: /[؀-ۿ]/.test(stored?.goal || '') ? 'ar' : 'en',
+    // The language the call actually ran in, as resolved and recorded when it
+    // was placed — not guessed from whether the goal text happens to contain
+    // Arabic script, which doesn't reliably track what was actually spoken.
+    language: stored?.language === 'ar' ? 'ar' : 'en',
+    isSelfCall: Boolean(stored?.to) && stored.to === config.owner.whatsapp,
   });
 
   if (callId) {
@@ -140,6 +144,16 @@ export async function handleEndOfCall(message) {
   // absence let him claim he'd rung someone when he hadn't.
   const tasks = drainTasks(callId);
   for (const task of tasks) {
+    // The same daily ceiling applies here as it does to calls placed directly
+    // from WhatsApp — without this, a task noted mid-call could dial past
+    // MAX_CALLS_PER_DAY, since this loop bypasses that check entirely otherwise.
+    if (memory.callsToday() >= config.behaviour.maxCallsPerDay) {
+      log.warn(`Skipping follow-up call to ${task.to} — daily limit (${config.behaviour.maxCallsPerDay}) reached.`);
+      await sendText(
+        `I was going to call ${task.calleeName || task.to} as promised, but we've hit today's call limit (${config.behaviour.maxCallsPerDay}). Raise MAX_CALLS_PER_DAY if you want me to go ahead anyway.`
+      );
+      continue;
+    }
     try {
       const placed = await placeCall({
         to: task.to,
@@ -153,6 +167,7 @@ export async function handleEndOfCall(message) {
         name: task.calleeName,
         goal: task.goal,
         status: 'dialling',
+        language: placed.language,
       });
       await sendText(`Calling ${task.calleeName} now, as you asked.`);
     } catch (err) {
