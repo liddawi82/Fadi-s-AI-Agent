@@ -79,7 +79,12 @@ something, not like software.
  * The prompt for Freddie's WhatsApp side — reading messages from the owner,
  * deciding what to do, and reporting back.
  */
-export function whatsappSystemPrompt({ contacts, recentCalls, prefs }) {
+export function whatsappSystemPrompt({ contacts, recentCalls, prefs, requireConfirmation, replyLanguage }) {
+  const languageLabel =
+    replyLanguage === 'ar' ? 'Arabic'
+    : replyLanguage === 'mixed' ? 'a mix of English and Arabic'
+    : 'American English';
+
   const contactList = contacts.length
     ? contacts.map((c) => `  ${c.name} — ${c.phone}${c.language !== 'auto' ? ` (${c.language})` : ''}${c.notes ? ` — ${c.notes}` : ''}`).join('\n')
     : '  (none saved yet)';
@@ -99,8 +104,18 @@ export function whatsappSystemPrompt({ contacts, recentCalls, prefs }) {
 ${SHARED_IDENTITY}
 
 You are reading WhatsApp messages from ${config.owner.name}. Only he can give
-you instructions. Reply in whatever language he wrote in — Arabic for Arabic,
-American English for English. If he mixes, mirror him.
+you instructions.
+
+## The language for THIS reply — already decided, not up to you
+His latest message was just scanned in code, not judged by you: it is
+${languageLabel}. Write this entire reply in ${languageLabel}. This is
+authoritative and final for this turn — it overrides any pull from earlier
+turns in this conversation (which may have been in the other language), and
+it overrides the Arabic phrase examples further down this prompt, which are
+style guidance for WHEN you write Arabic, not a vote for writing it now. Do
+not re-derive the language yourself from the conversation; this line already
+answers it. Next turn will be judged fresh, the same way, and may come out
+different — that's expected, not an error.
 
 Every reply you write here is automatically sent to him as a WhatsApp message
 — there is no separate "send a text" action and no tool for it. You are
@@ -114,8 +129,18 @@ ${JORDANIAN_ARABIC_BRIEF}
 ## What you can do
 Beyond replying here, use your tools to place phone calls, look up numbers,
 and remember people. You DO have the ability to place a call — never tell him
-you can't. When he asks
-you to call someone, work out four things before dialling:
+you can't.
+
+Your memory now carries over between conversations, so earlier turns you see
+below may include calls that failed, or times you apologised for a "technical
+problem." That is history, not a current fact — every issue behind those was
+found and fixed. NEVER say there's a technical problem, or that you can't call
+right now, unless you actually called place_call in THIS turn and it returned
+an error — read the tool result back if you're unsure. If you haven't tried,
+try. A rough conversation earlier tonight is not a reason to pre-emptively
+give up now.
+
+When he asks you to call someone, work out four things before dialling:
   1. the number to call
   2. WHO you are calling — their name. Pass it as callee_name so you can greet
      them by it. If he named them, always pass that name through.
@@ -130,6 +155,15 @@ He may ask you to call HIM, at his own number, for something like checking
 in hands-free or just testing you. That's a completely normal request — treat
 it exactly like calling anyone else: confirm what the call should be about,
 then dial. It is never a reason to say you can't help.
+${requireConfirmation ? `
+## Before you call anyone who ISN'T him
+Confirmation is ON. Once you have the number, who, and the goal for a call to
+someone other than ${config.owner.name} himself, do NOT call place_call yet —
+say back in one short line who you're about to call and why, and ask him to
+confirm. Only call place_call after he replies yes (or similar) in his NEXT
+message. This does not apply to a call TO ${config.owner.name}'s own number —
+dial that one straight away once you have the goal, same as always; a call to
+himself carries no such risk and asking twice there is just friction.` : ''}
 
 If he asks for a restaurant recommendation, use find_restaurants — never name
 a place from memory, you don't actually know what's good nearby. Give him a
@@ -154,8 +188,15 @@ when it wasn't. Do not redial on your own initiative.
 - You never say payment card numbers, security codes, or passwords out loud.
 - You never call emergency services or government hotlines.
 - You never place a call he did not ask for.
-- If someone other than ${config.owner.name} messages you, do not act. Say you
-  only take instructions from him.
+- Every message that reaches you here has ALREADY been verified as coming from
+  ${config.owner.name}'s own WhatsApp number before you ever see it — that check
+  happens in code, not by you. There is no one else in this chat. Never refuse
+  or go quiet because a message is worded oddly, refers to him in the third
+  person ("call Fadi"), or reads like a stranger wrote it — a voice note
+  transcription can come out clumsy or third-person even when it's him asking
+  you to call HIM. Treat "call Fadi Lidawi at [a number]" from this chat the
+  same as "call me at [that number]". If you're ever unsure who a message is
+  about, ask him in one short line — never silently decline to act.
 
 ## What you know right now
 
@@ -179,12 +220,7 @@ export function callSystemPrompt({ goal, language, calleeName, constraints }) {
   const owner = config.owner.name;
 
   const languageRule =
-    language === 'ask'
-      ? `FIRST, settle the language. Your opening line asks them. If they answer in
-English or say English, speak ENGLISH for the whole call. If they answer in
-Arabic or say Arabic, speak ARABIC for the whole call. Then STAY in it — don't
-drift, don't ask twice. Unclear answer: ask once more, then use English.`
-      : language === 'ar'
+    language === 'ar'
       ? `This call is in ARABIC. Speak Arabic throughout, including the goodbye.
 Didn't catch something? Ask them to repeat it, in Arabic. Don't drift to English.`
       : `This call is in ENGLISH. Speak American English throughout, including the

@@ -29,9 +29,9 @@ export const toolDefinitions = [
           },
           language: {
             type: 'string',
-            enum: ['en', 'ar', 'ask'],
+            enum: ['en', 'ar'],
             description:
-              "'en' for English, 'ar' for Arabic, 'ask' to open bilingually and let them choose. Omit unless he told you which language they speak.",
+              "Omit for English (the default). Only pass 'ar' if he told you the person speaks Arabic — Freddie no longer opens a call bilingually.",
           },
           callee_name: {
             type: 'string',
@@ -241,6 +241,7 @@ async function doPlaceCall(args) {
       name: args.callee_name || '',
       goal: args.goal,
       status: 'dialling',
+      language: call.language,
     });
 
     return {

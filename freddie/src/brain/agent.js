@@ -20,6 +20,23 @@ export function needsReasoningEffortNone(model) {
   return /^gpt-5/.test(String(model || ''));
 }
 
+// Which language THIS reply must be written in — decided here in code, from
+// the message that just arrived, rather than left to the model to judge from
+// the whole conversation. The model-judgement version of this rule was tried
+// twice and both times drifted into Arabic on plain English messages once the
+// conversation had a few Arabic replies in it. A cheap character scan on the
+// one message that matters doesn't have that failure mode.
+const ARABIC_CHAR = /[؀-ۿ]/;
+const LATIN_LETTER = /[A-Za-z]/;
+
+export function detectReplyLanguage(text) {
+  const hasArabic = ARABIC_CHAR.test(text || '');
+  const hasLatin = LATIN_LETTER.test(text || '');
+  if (hasArabic && hasLatin) return 'mixed';
+  if (hasArabic) return 'ar';
+  return 'en'; // includes empty, numbers-only, or punctuation-only messages
+}
+
 /**
  * Handle one message from the owner.
  * @param {string} text what he said (typed, or transcribed from a voice note)
@@ -35,6 +52,8 @@ export async function think(text) {
         contacts: memory.listContacts(),
         recentCalls: memory.recentCalls(6),
         prefs: memory.preferences(),
+        requireConfirmation: config.behaviour.requireConfirmation,
+        replyLanguage: detectReplyLanguage(text),
       }),
     },
     ...memory.conversationHistory(),
@@ -101,11 +120,17 @@ export async function think(text) {
  * Write the short report you get after a call ends. Kept separate from the
  * main loop so it can't accidentally trigger another call.
  */
-export async function summariseCall({ calleeName, goal, transcript, summary, endedReason, language }) {
+export async function summariseCall({ calleeName, goal, transcript, summary, endedReason, language, isSelfCall }) {
   const prompt = `
 You are Freddie. A call you placed has just ended. Write a short note to
 ${config.owner.name} telling him what happened. You are writing AS Freddie, TO him —
 never in his voice, and never as though you were the person called.
+${isSelfCall ? `
+THIS CALL WAS TO ${config.owner.name} HIMSELF — he is both the person you rang
+AND the person reading this report. Write as if speaking directly to him:
+"you said...", "we didn't land on...", never "${calleeName || 'he'} said..." or
+his name in the third person. Referring to him in the third person here reads
+as if you're describing a stranger, which is confusing since it was him.` : ''}
 
 RULES — these matter more than style:
 - State ONLY what is in the transcript below. If the transcript is empty or
