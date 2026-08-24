@@ -1,0 +1,20 @@
+{
+  "name": "freddie",
+  "version": "1.0.0",
+  "description": "A bilingual assistant with his own phone number. Text him on WhatsApp, he makes the call.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node scripts/check.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "openai": "^4.77.0",
+    "twilio": "^5.4.0"
+  }
+}
