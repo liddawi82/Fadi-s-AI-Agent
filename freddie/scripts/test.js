@@ -340,7 +340,7 @@ await t('the call prompt carries the dialect rules and the disclosure rule', () 
   ok(p.includes('بدي'), 'should include the Jordanian swaps');
   ok(p.includes("assistant"), 'should identify him as an assistant');
   ok(p.includes('Never claim to be'), 'should forbid impersonating the owner');
-  ok(p.includes('Start in Jordanian Arabic'), 'should open in Arabic when asked');
+  ok(p.includes('This call is in ARABIC'), 'should pin Arabic when asked');
   ok(p.includes('card number'), 'should carry the payment limit');
   ok(p.includes('Zaytinya'), 'should name who is being called');
 });
@@ -352,11 +352,28 @@ await t('the call prompt stays short, because length costs response time', () =>
   ok(!p.includes('Saved contacts'), 'contacts belong in the WhatsApp prompt only');
 });
 
-await t('the call prompt tells him to follow the other person\'s language', () => {
+await t('an English call is locked to English, with no Arabic farewell', () => {
   const p = prompts.callSystemPrompt({ goal: 'x', language: 'en' });
-  ok(p.includes('Start in American English'), 'should open in English');
-  ok(p.includes('switch to Arabic'), 'should switch when they speak Arabic');
-  ok(p.includes('switch to English'), 'should switch back');
+  ok(p.includes('This call is in ENGLISH'), 'should pin English');
+  ok(p.includes('do NOT end with an Arabic'), 'should forbid the Arabic goodbye');
+  ok(!p.includes('بدي'), 'the Arabic dialect block must not load on an English call');
+});
+
+await t('an Arabic call is locked to Arabic and told not to drift', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'ar' });
+  ok(p.includes('This call is in ARABIC'), 'should pin Arabic');
+  ok(p.includes('Do NOT drift into English'), 'should forbid drifting');
+  ok(p.includes('بدي'), 'the dialect block belongs on an Arabic call');
+});
+
+await t('an auto call picks one language and holds it', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'auto' });
+  ok(p.includes('do not flip back'), 'should forbid flip-flopping');
+});
+
+await t('confusion is handled by asking again, not by changing language', () => {
+  const p = prompts.callSystemPrompt({ goal: 'x', language: 'ar' });
+  ok(p.includes('do NOT change language because you'), 'the drift rule must be explicit');
 });
 
 await t('the WhatsApp prompt lists real contacts and calls', () => {

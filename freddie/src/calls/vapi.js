@@ -111,12 +111,20 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
       ],
     },
 
-    // Multilingual transcription so he can follow a switch between Arabic and
-    // English partway through a sentence.
+    // Pin the transcriber to the call's language wherever we know it.
+    //
+    // Leaving it on 'multi' sounds appealing but is measurably worse: the
+    // detector re-decides constantly, so a Jordanian speaker gets transcribed
+    // as garbled English, Freddie answers in English, and the call drifts.
+    // A pinned language is far more accurate. 'multi' is only used when we
+    // genuinely don't know who's answering.
     transcriber: {
       provider: config.vapi.transcriberProvider,
       model: config.vapi.transcriberModel,
-      language: config.vapi.transcriberLanguage,
+      language:
+        language === 'ar' ? 'ar'
+        : language === 'en' ? 'en'
+        : config.vapi.transcriberLanguage,
     },
 
     voice: {
@@ -139,7 +147,11 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
     // look something up, or go and check the book.
     silenceTimeoutSeconds: 45,
     maxDurationSeconds: 600,
-    endCallMessage: language === 'ar' ? 'تسلم، يعطيك العافية. مع السلامة.' : 'Great, thank you very much. Goodbye.',
+
+    // No endCallMessage on purpose. It was a fixed string picked from the
+    // language the call STARTED in, so an English conversation could end with
+    // an Arabic farewell. Freddie says goodbye himself, in whatever language
+    // the conversation actually ended up in.
   };
 }
 
