@@ -47,8 +47,17 @@ export function detectReplyLanguage(text) {
 // pattern and can lose; this check doesn't compete — it inspects what
 // actually happened this turn and refuses to let a false claim through
 // regardless of why the model produced it.
+//
+// First version only caught present-tense claims ("calling you now", "I'm
+// calling"). It missed "I'll call Chris at ... and ask ..." — future tense,
+// same false claim, same missing place_call — which is exactly how it slipped
+// through live: two present-tense claims got caught and forced into real
+// calls, a future-tense one right after did not and the call to Chris never
+// happened. Widened to cover "I'll call" / "I will call" / "going to call" /
+// "let me call" too, first-person commitments to call someone are the thing
+// being guarded against regardless of tense.
 const FAKE_CALLING_CLAIM_RE =
-  /\b(calling you now|i['’]?m calling|the line is ringing|dialling|dialing)\b|عم\s*أتصل|رح\s*أتصل|جاري\s*الاتصال|بتصل\s*فيك/i;
+  /\b(calling (?:you|him|her|them)?\s*now|i['’]?m calling|i['’]?ll call|i\s*will\s*call|(?:i['’]?m\s*)?going to call|let me call|the line is ringing|dialling|dialing)\b|عم\s*أتصل|رح\s*أتصل|جاري\s*الاتصال|بتصل\s*فيك|حاتصل|بدي\s*أتصل/i;
 
 /**
  * Handle one message from the owner.
