@@ -31,7 +31,7 @@ async function sendWhatsAppTemplate(templateSid, variables = []) {
       from: addressFor(config.twilio.whatsappFrom, 'whatsapp'),
       to: addressFor(config.owner.whatsapp, 'whatsapp'),
       contentSid: templateSid,
-      contentVariables: JSON.stringify(variables),
+      contentVariables: variables,
     });
     log.ok(`Sent via whatsapp (template): "${variables.slice(0, 2).join(', ')}"`);
     return msg;
