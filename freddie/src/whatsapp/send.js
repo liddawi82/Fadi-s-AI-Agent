@@ -14,9 +14,56 @@ const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 const AUDIO_DIR = path.join(process.cwd(), 'public', 'audio');
 
+// WhatsApp template SIDs (approved templates)
+const WHATSAPP_TEMPLATES = {
+  greeting: 'HX8cf904b9610dfb49345a1de30ad7f433',
+  calling: 'HXda8b5b44fb245f2e209d0f21c1121990',
+  callDone: 'HX488c3feab6586d2d927370c7acb0ff12',
+};
+
+/**
+ * Send a message using a WhatsApp template. Templates are required for
+ * WhatsApp A2P to ensure compliance and delivery.
+ */
+async function sendWhatsAppTemplate(templateSid, variables = []) {
+  try {
+    const msg = await client.messages.create({
+      from: addressFor(config.twilio.whatsappFrom, 'whatsapp'),
+      to: addressFor(config.owner.whatsapp, 'whatsapp'),
+      contentSid: templateSid,
+      contentVariables: JSON.stringify(variables),
+    });
+    log.ok(`Sent via whatsapp (template): "${variables.slice(0, 2).join(', ')}"`);
+    return msg;
+  } catch (err) {
+    log.error(`Could not send WhatsApp template:`, err.message);
+    return null;
+  }
+}
+
 /** Send a plain text message on the given channel (defaults to the last one used). */
 export async function sendText(body, channel = currentChannel()) {
   if (!body || !body.trim()) return null;
+
+  // For WhatsApp, use approved templates. For SMS, use free-form text.
+  if (channel === 'whatsapp') {
+    // Try to determine which template best matches the content
+    const lowerBody = body.toLowerCase();
+    let templateSid = WHATSAPP_TEMPLATES.greeting;
+    let variables = [config.owner.name || 'Fadi'];
+
+    if (lowerBody.includes('call') && lowerBody.includes('now')) {
+      templateSid = WHATSAPP_TEMPLATES.calling;
+    } else if (
+      lowerBody.includes('call') &&
+      (lowerBody.includes('completed') || lowerBody.includes('ended') || lowerBody.includes('voicemail'))
+    ) {
+      templateSid = WHATSAPP_TEMPLATES.callDone;
+      variables = [config.owner.name || 'Fadi', body.slice(0, 100)];
+    }
+
+    return sendWhatsAppTemplate(templateSid, variables);
+  }
 
   // SMS splits at 160 characters and Twilio bills per segment, so keep replies
   // tighter there than on WhatsApp.
@@ -33,12 +80,7 @@ export async function sendText(body, channel = currentChannel()) {
   } catch (err) {
     log.error(`Could not send via ${channel}:`, err.message);
 
-    // If WhatsApp fails (expired sandbox session is the usual cause) try SMS,
-    // so a call report isn't silently lost.
-    if (channel === 'whatsapp') {
-      log.warn('Falling back to SMS.');
-      return sendText(body, 'sms');
-    }
+    // If SMS fails, there's not much we can do for SMS fallback
     return null;
   }
 }
