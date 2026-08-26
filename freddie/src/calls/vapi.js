@@ -27,6 +27,36 @@ export function isBlockedNumber(phone) {
 }
 
 /**
+ * The transcriber for an ARABIC call.
+ *
+ * Transcriber providers do not share a schema and Vapi validates strictly, so
+ * this cannot be one generic {provider, model, language} object. Verified
+ * against Vapi's live schema at api.vapi.ai/api-json:
+ *
+ *   azure         — has NO `model` property at all; sending one is rejected.
+ *   speechmatics  — `required: ["provider", "customVocabulary"]`. customVocabulary
+ *                   has no default and no minItems, so [] is both mandatory and
+ *                   sufficient. `model` is NOT required and its enum holds only
+ *                   'default', so it is deliberately omitted.
+ *   deepgram      — {provider, model, language}, as English uses.
+ *
+ * English never reaches this function.
+ */
+function buildArabicTranscriber() {
+  const { provider, model, language } = config.vapi.arabicTranscriber;
+
+  if (provider === 'azure') {
+    return { provider: 'azure', language };
+  }
+
+  if (provider === 'speechmatics') {
+    return { provider: 'speechmatics', language, customVocabulary: [] };
+  }
+
+  return { provider, model, language };
+}
+
+/**
  * The assistant definition sent with each call. Everything about how Freddie
  * sounds and behaves on the phone is here.
  */
@@ -202,11 +232,13 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
     // value is always correct and always more accurate than 'multi' — the
     // detector re-decides constantly, so a Jordanian speaker gets transcribed
     // as garbled English, Freddie answers in English, and the call drifts.
-    transcriber: {
-      provider: config.vapi.transcriberProvider,
-      model: config.vapi.transcriberModel,
-      language: language === 'ar' ? 'ar' : 'en',
-    },
+    transcriber: language === 'ar'
+      ? buildArabicTranscriber()
+      : {
+          provider: config.vapi.transcriberProvider,
+          model: config.vapi.transcriberModel,
+          language: 'en',
+        },
 
     voice: {
       provider: config.vapi.voiceProvider,
