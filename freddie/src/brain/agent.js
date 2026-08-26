@@ -84,6 +84,67 @@ const FAKE_CALLING_CLAIM_RE = new RegExp(
 // fallback, which tells him nothing useful.
 const MAX_FAKE_CLAIM_NUDGES = 2;
 
+// The MIRROR of the guard above, and it exists because of a real failure.
+//
+// He sent an Arabic voice note: "مرحبا فريدي، كلمني بدي أحكي معك بالعربي،
+// وبلش معاي قولي مرحبا فادي، وقولي حابب أطمن على ابنك سمعت إنه ممغوص" — call
+// me, and open the call by saying hello and asking after my son. Freddie
+// replied in chat with exactly that greeting and never invoked place_call.
+//
+// The claim guard could not catch it: he never said he was calling, so there
+// was no false claim to block. Two things pulled him there — كلمني means both
+// "phone me" and "talk to me", and قولي ("say to me") reads as an instruction
+// to say it right here, especially since every reply he writes is auto-sent
+// to him as a WhatsApp message.
+//
+// Unlike the claim guard, which REFUSES to let a falsehood through, this one
+// only asks the model to look again. A call REQUEST is far harder to detect
+// reliably than a call CLAIM — "why didn't you call me", "call me later",
+// "don't call him" all contain the words — so the nudge below is written to be
+// declined. If he was asking about a past call, or something genuinely is
+// missing, the model answers normally and that answer stands.
+const CALL_REQUEST = String.raw`\b(?:call|ring|phone|dial)\b[^.!?\n]{0,20}?\b(?:me|him|her|them|us|back)\b`;
+const GIVE_A_CALL = String.raw`\bgive (?:me|him|her|them) a (?:call|ring|buzz)\b`;
+// Levantine: كلمني، اتصل فيي/فيه، رنلي، رن علي، خابرني، دقلي، اطلبلي
+const CALL_REQUEST_AR = String.raw`كلمن[يا]|[إا]تصل\s*(?:في|ب|ع)|رن+\s*(?:ل[يه]|عل[يى])|خابرن[يا]|دق+\s*ل[يه]|اطلبل[يه]`;
+
+// Any of these shortly before the verb means it is NOT a request to dial now:
+// a past call, a refusal, or a hypothetical.
+const NOT_A_REQUEST = String.raw`did ?n'?t|does ?n'?t|do ?n'?t|was ?n'?t|have ?n'?t|has ?n'?t|never|why|instead of|no need to|ما |لا |ليش|مش`;
+
+const OWNER_ASKED_FOR_CALL_RE = new RegExp(
+  `(?:${NOT_A_REQUEST})[^.!?\\n]{0,20}?(?:${CALL_REQUEST}|${CALL_REQUEST_AR})` +
+  `|(${CALL_REQUEST}|${GIVE_A_CALL}|${CALL_REQUEST_AR})`,
+  'i'
+);
+
+// Deferred requests ("call me later", "بعدين") aren't for now, and nudging on
+// them would be noise.
+const DEFERRED_RE = /\b(?:later|tomorrow|tonight|in an hour|in a bit|next week)\b|بعدين|بكرا|بعد شوي/i;
+
+// One nudge only. This guard asks a question rather than blocking a lie, so
+// pressing it a second time would just be arguing with the model.
+const MAX_MISSED_CALL_NUDGES = 1;
+
+/**
+ * Did his message ask for a call to be placed NOW?
+ *
+ * Capture group 1 is only set by the un-negated branch, so a match that came
+ * from the negated branch ("why didn't you call me") reports false.
+ */
+export function ownerAskedForACall(text) {
+  const t = String(text || '');
+  if (DEFERRED_RE.test(t)) return false;
+  const m = OWNER_ASKED_FOR_CALL_RE.exec(t);
+  if (!m || !m[1]) return false;
+
+  // The negation can also come AFTER the verb — "I asked you to call me but
+  // you didn't", "call me? you never did". A complaint about a call that
+  // never happened is not a request to place one now.
+  const after = t.slice(m.index + m[0].length, m.index + m[0].length + 30);
+  return !new RegExp(NOT_A_REQUEST, 'i').test(after);
+}
+
 /**
  * Handle one message from the owner.
  * @param {string} text what he said (typed, or transcribed from a voice note)
@@ -129,6 +190,11 @@ export async function think(text) {
 
   // How many times this turn has been sent back to rewrite an unbacked claim.
   let fakeClaimNudges = 0;
+
+  // Whether his message asked for a call, and whether we've already pointed
+  // that out once this turn.
+  const askedForCall = ownerAskedForACall(text);
+  let missedCallNudges = 0;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     let response;
@@ -180,6 +246,25 @@ export async function think(text) {
             "If you don't have enough to place the call yet, ask him for what's missing instead of saying you're calling.",
         });
         continue; // give the model another step to either really call or rewrite honestly
+      }
+
+      // He asked for a call and the turn is ending without one. Point it out
+      // once. Phrased so the model can say no: only it can tell a live request
+      // from a question about a past call.
+      if (askedForCall && !calledPlaceCallThisTurn && missedCallNudges < MAX_MISSED_CALL_NUDGES) {
+        missedCallNudges++;
+        log.warn(`Owner's message looked like a call request but no place_call ran; asking once: "${answer.slice(0, 120)}"`);
+        messages.push({
+          role: 'system',
+          content:
+            "His message looks like it asked you to place a call, and this turn is about to end without place_call having been invoked. " +
+            "If he did ask you to ring someone now, call place_call — and note that when he tells you what to SAY on the call " +
+            "(\"start by saying hello\", \"قولي مرحبا\", \"ask how his son is\"), that wording is the content of the CALL: put it in the goal. " +
+            "Do not perform those lines here in the chat — writing them to him is not making the call. " +
+            "If he was asking about a call that already happened, telling you not to call, or you're still missing the number or the goal, " +
+            "then your answer is right as it stands — send it unchanged.",
+        });
+        continue;
       }
 
       memory.appendTurn('assistant', answer);
