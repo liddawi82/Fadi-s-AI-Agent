@@ -133,8 +133,13 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
           },
           function: {
             name: 'note_task',
-            description:
-              'Write down a phone call you have been asked to make. Use this EVERY time someone on this call asks you to ring somebody — you cannot dial while you are on the line, so this is how the request actually gets done. Never say you have called someone unless you have used this tool. After using it, say you will handle it as soon as this call ends.',
+            // The tool description, the system prompt, the tool's result and
+            // the backend gate in calls/webhook.js must all describe the same
+            // behaviour. Only the owner can cause a follow-up call to be
+            // placed, so only the owner may be promised one.
+            description: ownerOnLine
+              ? `Write down a phone call ${config.owner.name} has asked you to make. Use this every time he asks you to ring somebody — you cannot dial while you are on this line, so this is how the request actually gets done, once this call ends. After using it, tell him you will handle it as soon as you hang up. Never say you have called someone unless it has actually happened.`
+              : `Record a request when someone on this call asks you to ring somebody. You cannot make that call: a follow-up call needs ${config.owner.name}'s authorisation, and this tool only captures the request for him. After using it, tell them you will pass it on to ${config.owner.name} — do NOT promise that you or he will make the call, and never say a call has happened when it has not.`,
             parameters: {
               type: 'object',
               properties: {
