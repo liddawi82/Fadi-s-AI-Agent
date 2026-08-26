@@ -48,16 +48,41 @@ export function detectReplyLanguage(text) {
 // actually happened this turn and refuses to let a false claim through
 // regardless of why the model produced it.
 //
-// First version only caught present-tense claims ("calling you now", "I'm
-// calling"). It missed "I'll call Chris at ... and ask ..." — future tense,
-// same false claim, same missing place_call — which is exactly how it slipped
-// through live: two present-tense claims got caught and forced into real
-// calls, a future-tense one right after did not and the call to Chris never
-// happened. Widened to cover "I'll call" / "I will call" / "going to call" /
-// "let me call" too, first-person commitments to call someone are the thing
-// being guarded against regardless of tense.
-const FAKE_CALLING_CLAIM_RE =
-  /\b(calling (?:you|him|her|them)?\s*now|i['’]?m calling|i['’]?ll call|i\s*will\s*call|(?:i['’]?m\s*)?going to call|let me call|the line is ringing|dialling|dialing)\b|عم\s*أتصل|رح\s*أتصل|جاري\s*الاتصال|بتصل\s*فيك|حاتصل|بدي\s*أتصل/i;
+// This has now leaked twice through PHRASING rather than through logic. The
+// first version caught only present tense ("calling you now", "I'm calling").
+// It was widened to "I'll call" / "going to call" / "let me call" after a call
+// to Chris silently never happened — and then leaked again, live, on "I'm
+// about to call Chris", which none of those literals cover.
+//
+// Enumerating ways to say "I am going to call" is a losing game, so this is no
+// longer a list of phrases. It is a shape: a first-person subject, then a
+// calling verb close behind it, with negations and hand-offs excluded so
+// "I can't call him" and "I'll ask him to call you" don't trip it.
+const SELF_REF = String.raw`\b(?:i|i['’]?m|i am|i['’]?ll|i will|let me|lemme)\b`;
+
+// If any of these sits between the subject and the verb, it isn't a claim that
+// Freddie is about to call: he's saying he can't, hasn't, or that somebody
+// ELSE should.
+const NOT_A_CLAIM = String.raw`can'?t|cannot|can not|won'?t|will not|do(?:es)? ?n'?t|di ?d ?n'?t|have ?n'?t|has ?n'?t|couldn'?t|wasn'?t|am not|never|unable|ask`;
+
+const CALL_VERB = String.raw`\b(?:call|calling|ring|ringing|dial|dialing|dialling|phone|phoning)\b`;
+
+const FAKE_CALLING_CLAIM_RE = new RegExp(
+  // "I'm about to call Chris", "I'll go ahead and ring her", "let me call him"
+  `${SELF_REF}(?:(?!${NOT_A_CLAIM})[^.!?\\n]){0,40}?${CALL_VERB}` +
+  // Subjectless commitments: "Calling Chris now.", "Ringing him shortly."
+  `|\\b(?:calling|ringing|dialing|dialling|phoning)\\b[^.!?\\n]{0,30}?\\b(?:now|shortly|right away|as we speak|in a (?:sec|second|moment|minute))\\b` +
+  `|\\bthe line is ringing\\b|\\b(?:dialling|dialing) now\\b` +
+  // Arabic equivalents.
+  `|عم\\s*[أا]تصل|رح\\s*[أا]تصل|ح[أا]?تصل|بدي\\s*[أا]تصل|جاري\\s*الاتصال|بتصل\\s*فيك|عم\\s*بتصل`,
+  'i'
+);
+
+// How many times one turn may be sent back to rewrite an unbacked claim before
+// we stop asking. Without a cap, a model that keeps reasserting the same claim
+// burns every remaining step and lands on the generic "I got tangled up"
+// fallback, which tells him nothing useful.
+const MAX_FAKE_CLAIM_NUDGES = 2;
 
 /**
  * Handle one message from the owner.
@@ -102,6 +127,9 @@ export async function think(text) {
   // allowed to claim a call happened.
   let calledPlaceCallThisTurn = false;
 
+  // How many times this turn has been sent back to rewrite an unbacked claim.
+  let fakeClaimNudges = 0;
+
   for (let step = 0; step < MAX_STEPS; step++) {
     let response;
     try {
@@ -130,11 +158,24 @@ export async function think(text) {
       const answer = (choice.content || '').trim() || 'Done.';
 
       if (!calledPlaceCallThisTurn && FAKE_CALLING_CLAIM_RE.test(answer)) {
-        log.warn(`Blocked a "calling you now"-style reply with no place_call this turn: "${answer.slice(0, 120)}"`);
+        log.warn(`Blocked a commitment-to-call reply with no place_call this turn: "${answer.slice(0, 120)}"`);
+
+        // Asked twice and still claiming it? Stop asking. Returning the claim
+        // would be a lie, and looping on to the generic "I got tangled up"
+        // fallback would tell him nothing — so say plainly what didn't happen.
+        if (++fakeClaimNudges > MAX_FAKE_CLAIM_NUDGES) {
+          log.error('Model kept committing to a call after correction; answering honestly instead.');
+          const honest =
+            "I haven't actually placed that call — something went wrong on my end. " +
+            "Send me the number and what you'd like me to say, and I'll get it done.";
+          memory.appendTurn('assistant', honest);
+          return honest;
+        }
+
         messages.push({
           role: 'system',
           content:
-            "That answer claims a call is happening, but place_call was never invoked this turn — that would be false. " +
+            "That answer says a call is happening or is about to happen, but place_call was never invoked this turn — so it would be false. " +
             "If you have what you need (who to call and what for), call place_call right now, then report what it returned. " +
             "If you don't have enough to place the call yet, ask him for what's missing instead of saying you're calling.",
         });
