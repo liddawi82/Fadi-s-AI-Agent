@@ -6,6 +6,7 @@
 
 import { config, normalisePhone } from '../config.js';
 import { callSystemPrompt } from '../brain/prompts.js';
+import * as memory from '../memory/store.js';
 import { log } from '../util/log.js';
 
 const API = 'https://api.vapi.ai';
@@ -37,6 +38,14 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
   // Freddie's wording honest about what will actually happen.
   const ownerOnLine = normalisePhone(to) === config.owner.whatsapp;
 
+  // Whatever you've already recorded about this person, so Freddie can pitch
+  // the call the way the relationship deserves rather than talking to your
+  // brother the way he'd talk to a bank. Derived here, so both routes to a
+  // call — from WhatsApp, and a follow-up noted mid-call — get it without
+  // anyone having to remember to pass it. No contact, or no note, and the
+  // prompt simply omits the line and Freddie reads the room instead.
+  const relationship = (memory.findContact(to)?.notes || '').trim();
+
   return {
     name: 'Freddie',
     firstMessageMode: 'assistant-speaks-first',
@@ -57,7 +66,7 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
           : `مرحبا، أنا فريدي، مساعد ${owner}. معك دقيقة؟`;
       }
       return name
-        ? `Hi, is that ${name}? This is Freddie, ${owner}'s assistant. Do you have a moment?`
+        ? `Hi, is this ${name}? It's Freddie, ${owner}'s assistant. Do you have a moment?`
         : `Hi, this is Freddie — I'm ${owner}'s assistant. Do you have a moment?`;
     })(),
 
@@ -90,8 +99,8 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
       voiceSeconds: 0.2,
       backoffSeconds: 1,
       acknowledgementPhrases: [
-        'okay', 'ok', 'right', 'uh-huh', 'mm-hmm', 'yeah', 'yes', 'sure', 'got it', 'i see',
-        'تمام', 'ايوا', 'اه', 'اوك', 'مممم',
+        'okay', 'ok', 'right', 'uh-huh', 'mm-hmm', 'mhm', 'yeah', 'yes', 'sure', 'got it', 'i see',
+        'تمام', 'ايوا', 'ايه', 'اه', 'اوك', 'مممم', 'طيب', 'ماشي',
       ],
     },
 
@@ -99,7 +108,7 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
       provider: 'openai',
       model: config.openai.model,
       temperature: 0.6,
-      messages: [{ role: 'system', content: callSystemPrompt({ goal, language, calleeName, constraints, ownerOnLine }) }],
+      messages: [{ role: 'system', content: callSystemPrompt({ goal, language, calleeName, constraints, ownerOnLine, relationship }) }],
       tools: [
         {
           type: 'function',
