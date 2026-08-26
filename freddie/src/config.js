@@ -94,6 +94,26 @@ export function loadConfig() {
       voiceProvider: process.env.VAPI_VOICE_PROVIDER || '11labs',
       voiceId: process.env.VAPI_VOICE_ID || 'burt',
       voiceModel: process.env.VAPI_VOICE_MODEL || 'eleven_flash_v2_5',
+
+      // How fast Freddie talks. ElevenLabs' own default is 1.0, and
+      // eleven_flash_v2_5 is the latency-optimised model — it delivers a line
+      // at a clip, which is most noticeable on the opening introduction,
+      // where three clauses arrive in one breath before the other person has
+      // tuned in. Settable from Railway so it can be tuned by ear across a
+      // few calls without a deploy each time.
+      //
+      // Unset means the property is omitted from the payload entirely, so
+      // deploying this on its own changes nothing. ElevenLabs accepts
+      // 0.7 to 1.2; anything outside that is clamped rather than sent, since
+      // Vapi rejects the whole call for an out-of-range value.
+      voiceSpeed: (() => {
+        const raw = process.env.VAPI_VOICE_SPEED;
+        if (raw === undefined || raw === '') return null;
+        const n = Number.parseFloat(raw);
+        if (!Number.isFinite(n)) return null;
+        return Math.min(1.2, Math.max(0.7, n));
+      })(),
+
       transcriberProvider: process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram',
       transcriberModel: process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
       // NOTE: the transcriber's language for ENGLISH calls is derived directly
