@@ -23,16 +23,22 @@ export function verifyVapi(req) {
 }
 
 /**
- * Was this call placed TO the owner's own number — is the person on the line
- * him? Derived from the record we stored when we dialled, never from anything
- * Vapi or the person on the call can influence. A call we don't recognise
- * (inbound, or missing from memory) counts as NOT the owner: fail closed.
+ * Was this call DIALLED TO the owner's configured number?
+ *
+ * Note what this does and does not establish. It proves the destination we
+ * dialled was his number — not that he personally answered it. Someone else
+ * picking up his phone, or a diverted line, still reads as true. Verifying who
+ * actually spoke is out of scope; the destination is the boundary we enforce.
+ *
+ * Derived from the record we stored when we dialled, never from anything Vapi
+ * or the person on the call can influence. A call we don't recognise (inbound,
+ * or missing from memory) counts as NOT the owner: fail closed.
  *
  * This is the voice-channel twin of the sender check in whatsapp/inbound.js.
  * Without it, anyone who answers a phone can make Freddie place calls on the
  * owner's line, to any number they choose, by asking him to during the call.
  */
-export function isOwnerCall(callId) {
+export function isOwnerDestinationCall(callId) {
   const stored = callId ? memory.getCall(callId) : null;
   return Boolean(stored?.to) && stored.to === config.owner.whatsapp;
 }
@@ -91,7 +97,7 @@ export async function handleToolCall(message) {
         // Only the owner may cause a call to be placed. When anyone else asks,
         // this request will be reported to him and go no further — so Freddie
         // must not promise them a call he is not authorised to make.
-        const ownerAsked = isOwnerCall(message?.call?.id);
+        const ownerAsked = isOwnerDestinationCall(message?.call?.id);
         results.push({
           toolCallId: id,
           result: ownerAsked
@@ -149,7 +155,7 @@ export async function handleEndOfCall(message) {
     // was placed — not guessed from whether the goal text happens to contain
     // Arabic script, which doesn't reliably track what was actually spoken.
     language: stored?.language === 'ar' ? 'ar' : 'en',
-    isSelfCall: isOwnerCall(callId),
+    isSelfCall: isOwnerDestinationCall(callId),
   });
 
   if (callId) {
@@ -169,16 +175,31 @@ export async function handleEndOfCall(message) {
 
   // Who was on that call decides whether these get dialled at all. Anything
   // asked by someone other than the owner is reported to him, not acted on.
-  const ownerAsked = isOwnerCall(callId);
+  const ownerAsked = isOwnerDestinationCall(callId);
 
   for (const task of tasks) {
     if (!ownerAsked) {
       const who = stored?.name || stored?.to || 'Someone on that call';
-      await sendText(
-        `${who} asked me to ring ${task.calleeName} (${task.to}) — ${task.goal}. ` +
-        `I haven't called them: tell me to go ahead and I will.`
-      );
-      log.warn(`Not calling ${task.to} — requested by ${who}, not the owner. Reported instead.`);
+      // Name and number are the same string when no name was given — don't
+      // print it twice.
+      const target = task.calleeName && task.calleeName !== task.to
+        ? `${task.calleeName} (${task.to})`
+        : task.to;
+
+      // Purely factual. Nothing here should suggest that a particular reply
+      // authorises the call, because no such mechanism exists in code — any
+      // later call goes through the normal WhatsApp path and its own checks.
+      try {
+        await sendText(`${who} asked me to call ${target} — ${task.goal}. I did not place the call.`);
+      } catch (err) {
+        // Telling him failed; the call still must not happen, and the tasks
+        // behind this one still need blocking.
+        log.error(`Could not notify the owner about the blocked call to ${task.to}:`, err.message);
+      }
+
+      // Logged either way, so the security decision is recorded even when the
+      // notification never reaches him.
+      log.warn(`Blocked third-party follow-up call to ${task.to}.`);
       continue;
     }
 
