@@ -235,7 +235,7 @@ ${Object.keys(prefs).length ? Object.entries(prefs).map(([k, v]) => `  ${k}: ${v
  * in-call assistant's instructions. It's deliberately different from the
  * WhatsApp prompt — on a call he has one job and limited time.
  */
-export function callSystemPrompt({ goal, language, calleeName, constraints }) {
+export function callSystemPrompt({ goal, language, calleeName, constraints, ownerOnLine }) {
   const owner = config.owner.name;
 
   const languageRule =
@@ -279,9 +279,15 @@ leave. Unsure you got what you came for? Ask them to confirm it back to you.
 Be brief and listen more than you talk. Phone menu: try to navigate it, and if
 stuck, end politely and report you couldn't get through. If they won't deal with
 an assistant, thank them and go — don't argue. If a real decision comes up that
-changes whether the goal is met, say "one moment" and use ask_owner. If they ask
-you to ring someone, use note_task — you cannot dial while on this line, and you
-must never say you've called someone you haven't.
+changes whether the goal is met, say "one moment" and use ask_owner.
+${ownerOnLine
+  ? `If he asks you to ring someone, use note_task — you cannot dial while on this
+line, so that is how it gets done, as soon as this call ends. If he just said the
+number aloud, read it back to him before you note it.`
+  : `If they ask you to ring someone, use note_task — you cannot dial from this line,
+and a call to anyone new needs ${owner}'s go-ahead, so tell them you'll pass it to
+him. Never say you'll be making that call yourself.`}
+You must never say you've called someone you haven't.
 
 If the goal is finding somewhere to eat, or a location comes up and food does
 too, use suggest_restaurants to pull real, well-reviewed options rather than
