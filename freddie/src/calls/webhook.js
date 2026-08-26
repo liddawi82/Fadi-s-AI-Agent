@@ -59,6 +59,22 @@ export async function handleToolCall(message) {
       try { args = JSON.parse(args); } catch { args = {}; }
     }
 
+    // What happened, in a few words, logged once at the end of this iteration.
+    //
+    // Before this, the three in-call tools wrote nothing on success. A live
+    // Arabic call showed three POSTs to /vapi/tools inside forty seconds, all
+    // HTTP 200 — and the logs could not say which tool ran, whether it found
+    // anything, or why Freddie then went quiet for over a minute instead of
+    // reading out what he had. Diagnosing that meant inferring from HTTP
+    // timings, which is guesswork.
+    //
+    // Deliberately NOT logged: locations, restaurant names, phone numbers,
+    // goals, anything said on the call. Tool name, outcome and a count are
+    // enough to answer "did it work" without keeping a second copy of the
+    // conversation anywhere.
+    const startedAt = Date.now();
+    let outcome = 'handled';
+
     if (name === 'ask_owner') {
       const question = args.question || 'A question came up on the call.';
       log.info(`Freddie is asking mid-call: "${question}"`);
@@ -67,6 +83,7 @@ export async function handleToolCall(message) {
       await sendText(`📞 On the call now — ${question}`);
 
       const answer = await promise;
+      outcome = answer ? 'owner answered' : 'owner did not reply in time';
       results.push({
         toolCallId: id,
         result: answer
@@ -78,8 +95,10 @@ export async function handleToolCall(message) {
       // Blocked first: an emergency number is short, so it would otherwise trip
       // the dialable check and get refused for the wrong, less clear reason.
       if (isBlockedNumber(to)) {
+        outcome = 'refused — emergency number';
         results.push({ toolCallId: id, result: 'That is an emergency line. Refuse, and say why.' });
       } else if (!isDialable(to)) {
+        outcome = 'refused — not a dialable number';
         results.push({
           toolCallId: id,
           result:
@@ -98,6 +117,9 @@ export async function handleToolCall(message) {
         // this request will be reported to him and go no further — so Freddie
         // must not promise them a call he is not authorised to make.
         const ownerAsked = isOwnerDestinationCall(message?.call?.id);
+        outcome = ownerAsked
+          ? 'noted — owner on the line, will dial after this call'
+          : 'noted — third party, will be reported not dialled';
         results.push({
           toolCallId: id,
           result: ownerAsked
@@ -110,8 +132,12 @@ export async function handleToolCall(message) {
     } else if (name === 'suggest_restaurants') {
       const found = await findRestaurants(args.location, args.cuisine);
       if (!found.ok) {
+        // findRestaurants only warns on a non-OK HTTP response, so a missing
+        // key, a missing location or an empty result set were all silent.
+        outcome = `no results — ${found.message.slice(0, 60)}`;
         results.push({ toolCallId: id, result: found.message });
       } else {
+        outcome = `${found.restaurants.length} place(s) returned to Freddie`;
         const list = found.restaurants
           .map((r) => {
             const bits = [r.name];
@@ -127,8 +153,13 @@ export async function handleToolCall(message) {
         });
       }
     } else {
+      outcome = 'UNKNOWN TOOL — Freddie asked for something that does not exist';
       results.push({ toolCallId: id, result: `Unknown tool "${name}".` });
     }
+
+    // One line per invocation, so a tool asked for three times in forty
+    // seconds reads as three lines rather than as silence.
+    log.info(`mid-call tool: ${name} → ${outcome} (${Date.now() - startedAt}ms)`);
   }
 
   return { results };
