@@ -23,6 +23,21 @@ export function verifyVapi(req) {
 }
 
 /**
+ * Was this call placed TO the owner's own number — is the person on the line
+ * him? Derived from the record we stored when we dialled, never from anything
+ * Vapi or the person on the call can influence. A call we don't recognise
+ * (inbound, or missing from memory) counts as NOT the owner: fail closed.
+ *
+ * This is the voice-channel twin of the sender check in whatsapp/inbound.js.
+ * Without it, anyone who answers a phone can make Freddie place calls on the
+ * owner's line, to any number they choose, by asking him to during the call.
+ */
+export function isOwnerCall(callId) {
+  const stored = callId ? memory.getCall(callId) : null;
+  return Boolean(stored?.to) && stored.to === config.owner.whatsapp;
+}
+
+/**
  * A tool call from Freddie while he is on the phone.
  * Vapi expects: { results: [{ toolCallId, result }] }
  */
@@ -73,9 +88,17 @@ export async function handleToolCall(message) {
           calleeName: args.callee_name || to,
           language: args.language || 'auto',
         });
+        // Only the owner may cause a call to be placed. When anyone else asks,
+        // this request will be reported to him and go no further — so Freddie
+        // must not promise them a call he is not authorised to make.
+        const ownerAsked = isOwnerCall(message?.call?.id);
         results.push({
           toolCallId: id,
-          result: `Written down. You WILL ring ${args.callee_name || to} the moment this call ends. Tell them so — and do not say it has already happened.`,
+          result: ownerAsked
+            ? `Written down. You'll ring ${args.callee_name || to} as soon as this call ends — ` +
+              `you can tell him that. Don't say it has already happened.`
+            : `Noted for ${config.owner.name}. Tell them you'll pass it on to ${config.owner.name}. ` +
+              `Do NOT say you'll be making that call yourself, and don't say it has happened.`,
         });
       }
     } else if (name === 'suggest_restaurants') {
@@ -126,7 +149,7 @@ export async function handleEndOfCall(message) {
     // was placed — not guessed from whether the goal text happens to contain
     // Arabic script, which doesn't reliably track what was actually spoken.
     language: stored?.language === 'ar' ? 'ar' : 'en',
-    isSelfCall: Boolean(stored?.to) && stored.to === config.owner.whatsapp,
+    isSelfCall: isOwnerCall(callId),
   });
 
   if (callId) {
@@ -143,7 +166,22 @@ export async function handleEndOfCall(message) {
   // Now do whatever he agreed to during the call. This is the step whose
   // absence let him claim he'd rung someone when he hadn't.
   const tasks = drainTasks(callId);
+
+  // Who was on that call decides whether these get dialled at all. Anything
+  // asked by someone other than the owner is reported to him, not acted on.
+  const ownerAsked = isOwnerCall(callId);
+
   for (const task of tasks) {
+    if (!ownerAsked) {
+      const who = stored?.name || stored?.to || 'Someone on that call';
+      await sendText(
+        `${who} asked me to ring ${task.calleeName} (${task.to}) — ${task.goal}. ` +
+        `I haven't called them: tell me to go ahead and I will.`
+      );
+      log.warn(`Not calling ${task.to} — requested by ${who}, not the owner. Reported instead.`);
+      continue;
+    }
+
     // The same daily ceiling applies here as it does to calls placed directly
     // from WhatsApp — without this, a task noted mid-call could dial past
     // MAX_CALLS_PER_DAY, since this loop bypasses that check entirely otherwise.
