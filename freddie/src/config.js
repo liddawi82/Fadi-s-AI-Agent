@@ -96,9 +96,27 @@ export function loadConfig() {
       voiceModel: process.env.VAPI_VOICE_MODEL || 'eleven_flash_v2_5',
       transcriberProvider: process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram',
       transcriberModel: process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
-      // NOTE: the transcriber's language is now always derived directly from
-      // the call's own language ('ar' or 'en') in calls/vapi.js — there is no
-      // separate VAPI_TRANSCRIBER_LANGUAGE setting to configure any more.
+      // NOTE: the transcriber's language for ENGLISH calls is derived directly
+      // from the call's own language in calls/vapi.js. Arabic is configured
+      // separately, below.
+
+      // Arabic gets its own transcriber so it can be swapped from Railway
+      // without touching English. Deepgram has no setting that serves
+      // Jordanian Arabic with English mixed in — `ar-JO` isn't in Vapi's
+      // Deepgram language enum, and Deepgram's `multi` doesn't include Arabic
+      // at all — so the candidate is a different provider, not a different
+      // language code.
+      //
+      // Each value falls back to the shared setting above, so leaving all
+      // three unset reproduces today's Arabic behaviour exactly: deploying
+      // this on its own changes nothing.
+      arabicTranscriber: {
+        provider: (process.env.VAPI_AR_TRANSCRIBER_PROVIDER
+                   || process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram').toLowerCase(),
+        model: process.env.VAPI_AR_TRANSCRIBER_MODEL
+               || process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
+        language: process.env.VAPI_AR_TRANSCRIBER_LANGUAGE || 'ar',
+      },
 
       // The language calls use unless one is named explicitly. English by
       // default — Freddie no longer opens a call bilingually and asking the
