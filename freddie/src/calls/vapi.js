@@ -4,7 +4,7 @@
 // interruptions. Freddie hands it a goal and a personality; Vapi does the
 // talking and calls back here when it needs a tool or when the call ends.
 
-import { config } from '../config.js';
+import { config, normalisePhone } from '../config.js';
 import { callSystemPrompt } from '../brain/prompts.js';
 import { log } from '../util/log.js';
 
@@ -29,7 +29,14 @@ export function isBlockedNumber(phone) {
  * The assistant definition sent with each call. Everything about how Freddie
  * sounds and behaves on the phone is here.
  */
-function buildAssistant({ goal, language, calleeName, constraints }) {
+function buildAssistant({ to, goal, language, calleeName, constraints }) {
+  // Is Freddie about to talk to the owner himself? Only he may ask for a
+  // follow-up call, so this decides what Freddie is allowed to promise when
+  // someone on the line asks him to ring a third party. The backend enforces
+  // the same rule independently in calls/webhook.js — this flag only keeps
+  // Freddie's wording honest about what will actually happen.
+  const ownerOnLine = normalisePhone(to) === config.owner.whatsapp;
+
   return {
     name: 'Freddie',
     firstMessageMode: 'assistant-speaks-first',
@@ -92,7 +99,7 @@ function buildAssistant({ goal, language, calleeName, constraints }) {
       provider: 'openai',
       model: config.openai.model,
       temperature: 0.6,
-      messages: [{ role: 'system', content: callSystemPrompt({ goal, language, calleeName, constraints }) }],
+      messages: [{ role: 'system', content: callSystemPrompt({ goal, language, calleeName, constraints, ownerOnLine }) }],
       tools: [
         {
           type: 'function',
@@ -243,7 +250,7 @@ export async function placeCall({ to, goal, language, calleeName = '', constrain
   const body = {
     phoneNumberId: config.vapi.phoneNumberId,
     customer: { number: to },
-    assistant: buildAssistant({ goal, language, calleeName, constraints }),
+    assistant: buildAssistant({ to, goal, language, calleeName, constraints }),
   };
 
   const res = await fetch(`${API}/call`, {
