@@ -120,7 +120,22 @@ const OWNER_ASKED_FOR_CALL_RE = new RegExp(
 
 // Deferred requests ("call me later", "بعدين") aren't for now, and nudging on
 // them would be noise.
-const DEFERRED_RE = /\b(?:later|tomorrow|tonight|in an hour|in a bit|next week)\b|بعدين|بكرا|بعد شوي/i;
+// The live case that exposed this was "call me after 10 minutes" — a phrasing
+// none of the original literals covered, so it fell through to the generic
+// "something went wrong on my end". Any explicit delay counts, not just the
+// round words.
+const DEFERRED_RE = new RegExp(
+  String.raw`\b(?:later|tomorrow|tonight|next week|this evening|this afternoon)\b` +
+  // "in 10 minutes", "after half an hour", "in a couple of hours", "in a bit".
+  // The qualifier group repeats so "half an hour" and "a few minutes" both fit;
+  // a unit word is always required, so "call him in Dallas" can't trip it.
+  String.raw`|\b(?:in|after|within)\s+` +
+  String.raw`(?:(?:a|an|another|half|about|around|~|\d+|few|couple|several)\s+(?:of\s+)?)*` +
+  String.raw`(?:min(?:ute)?s?|hours?|hrs?|days?|secs?|seconds?|bit|while|moment)\b` +
+  // Arabic: بعدين، بكرا، بعد شوي، بعد ١٠ دقايق، بعد ساعة
+  String.raw`|بعدين|بكرا|بكره|بعد\s*(?:شوي|شوية|ساعة|نص|كم|\d|[٠-٩])`,
+  'i'
+);
 
 // One nudge only. This guard asks a question rather than blocking a lie, so
 // pressing it a second time would just be arguing with the model.
@@ -144,6 +159,35 @@ export function ownerAskedForACall(text) {
   const after = t.slice(m.index + m[0].length, m.index + m[0].length + 30);
   return !new RegExp(NOT_A_REQUEST, 'i').test(after);
 }
+
+// A THIRD kind of false claim, and the most costly one seen so far.
+//
+// Asked to WhatsApp أبو أمايا a set of flight options, Freddie invoked
+// place_call instead and then reported: "بعثت الرسالة لأبو أمايا على رقمه زي
+// ما طلبت" — I sent the message to his number as you asked. He hadn't. He rang
+// him. A minute later he asked mid-call whether he could send from the owner's
+// number, which is the question of something that has just realised it can't.
+//
+// What makes this one simple to catch: there is NO tool that sends a message to
+// anyone but the owner, and there never has been (see whatsapp/send.js — every
+// send is hardcoded to config.owner.whatsapp). So unlike the calling guard,
+// this needs no "did a tool run this turn" check. A first-person claim to have
+// messaged SOMEONE ELSE is false unconditionally.
+//
+// The one thing that must not trip it is the owner himself. Freddie really does
+// send him messages — every reply is one — so "I've sent you the details" is
+// true and ordinary, and second-person targets are excluded throughout.
+const SENT_VERB = String.raw`\b(?:sent|texted|messaged|whatsapped|forwarded|passed (?:it |them |that )?(?:on|along)|shared)\b`;
+const SECOND_PERSON = String.raw`\byou\b|\byour\b|إلك|الك|لك\b`;
+
+export const FAKE_SEND_CLAIM_RE = new RegExp(
+  // "I sent him the details", "I've forwarded it to Ahmad", "I texted her"
+  `${SELF_REF}(?:(?!${NOT_A_CLAIM}|${SECOND_PERSON})[^.!?\\n]){0,40}?${SENT_VERB}` +
+  `(?:(?!${SECOND_PERSON})[^.!?\\n]){0,40}?\\b(?:him|her|them|to)\\b` +
+  // Arabic: بعثت / بعتلها / أرسلت / وصّلتله — excluding ...لك (to you).
+  `|(?:بعث?ت|[أا]رسلت|وصّلت|بعتل)(?!\\s*لك|\\s*إلك|ل[كك])[^.!?\\n]{0,30}?(?:ل[هها]|لأ|لإ|لل)`,
+  'i'
+);
 
 /**
  * Handle one message from the owner.
@@ -231,9 +275,17 @@ export async function think(text) {
         // fallback would tell him nothing — so say plainly what didn't happen.
         if (++fakeClaimNudges > MAX_FAKE_CLAIM_NUDGES) {
           log.error('Model kept committing to a call after correction; answering honestly instead.');
-          const honest =
-            "I haven't actually placed that call — something went wrong on my end. " +
-            "Send me the number and what you'd like me to say, and I'll get it done.";
+
+          // The old wording here said "something went wrong on my end" in every
+          // case. On "call me in 10 minutes" that was itself untrue: nothing
+          // went wrong, he simply cannot schedule anything, and the loop went
+          // round three times because he kept promising a call he could never
+          // make. Naming the real limitation is both honest and more useful.
+          const honest = DEFERRED_RE.test(text)
+            ? "I can't set a call for later — I've no way to schedule one, so it would just never happen. " +
+              "Message me when you want me to ring you and I'll do it there and then."
+            : "I haven't actually placed that call — something went wrong on my end. " +
+              "Send me the number and what you'd like me to say, and I'll get it done.";
           memory.appendTurn('assistant', honest);
           return honest;
         }
@@ -242,10 +294,43 @@ export async function think(text) {
           role: 'system',
           content:
             "That answer says a call is happening or is about to happen, but place_call was never invoked this turn — so it would be false. " +
-            "If you have what you need (who to call and what for), call place_call right now, then report what it returned. " +
-            "If you don't have enough to place the call yet, ask him for what's missing instead of saying you're calling.",
+            "If you have what you need (who to call and what for), call place_call now, then report what it returned. " +
+            // Without this, the nudge overrode the confirm-first rule: a
+            // premature "رح أتصل" on a third-party call was pushed straight
+            // into dialling, skipping the approval step entirely.
+            (config.behaviour.requireConfirmation
+              ? "The one exception is a call to someone OTHER than him: those still need his go-ahead first, so there ask him to confirm rather than dialling — just don't say you're already calling. "
+              : '') +
+            "If you don't have enough to place the call yet, ask him for what's missing instead of saying you're calling. " +
+            "And if he asked you to call at some LATER time, say plainly that you can't schedule one — you have no way to — rather than promising it.",
         });
         continue; // give the model another step to either really call or rewrite honestly
+      }
+
+      // A claim to have messaged somebody else. Unconditionally false — there
+      // is no tool that can do it — so this one blocks rather than asks, the
+      // same way the calling guard does. One rewrite, then the honest line.
+      if (FAKE_SEND_CLAIM_RE.test(answer)) {
+        log.warn(`Blocked a claim of having messaged a third party: "${answer.slice(0, 120)}"`);
+
+        if (++fakeClaimNudges > MAX_FAKE_CLAIM_NUDGES) {
+          log.error('Model kept claiming it sent a message; answering honestly instead.');
+          const honest =
+            "I can't send a message to anyone but you — texting and WhatsApp only work between the two of us. " +
+            "What I can do is ring them and say it out loud. Want me to call?";
+          memory.appendTurn('assistant', honest);
+          return honest;
+        }
+
+        messages.push({
+          role: 'system',
+          content:
+            "That answer says you sent, texted, forwarded or passed a message to someone. You cannot do that and never could: " +
+            "every message you write goes to him and nobody else, and there is no tool for messaging a third party. " +
+            "Saying you did it is false, and placing a call instead is NOT the same thing — don't report a call as a message sent. " +
+            "Tell him plainly that you can't message anyone but him, and offer what you can actually do: ring the person and say it.",
+        });
+        continue;
       }
 
       // He asked for a call and the turn is ending without one. Point it out
