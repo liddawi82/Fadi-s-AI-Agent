@@ -114,6 +114,15 @@ export function loadConfig() {
         return Math.min(1.2, Math.max(0.7, n));
       })(),
 
+      // What Freddie does when he reaches an answering machine.
+      //
+      // Unset — the default, and what was asked for — means he hangs up
+      // without saying anything. Set this to some text and he leaves that
+      // instead. It is deliberately a single switch: Vapi only stays silent
+      // when BOTH the voicemail tool's messages and the assistant's
+      // voicemailMessage are empty, so one value has to drive both.
+      voicemailMessage: (process.env.VAPI_VOICEMAIL_MESSAGE || '').trim(),
+
       transcriberProvider: process.env.VAPI_TRANSCRIBER_PROVIDER || 'deepgram',
       transcriberModel: process.env.VAPI_TRANSCRIBER_MODEL || 'nova-3',
       // NOTE: the transcriber's language for ENGLISH calls is derived directly
