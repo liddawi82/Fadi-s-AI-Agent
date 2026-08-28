@@ -224,8 +224,47 @@ function buildAssistant({ to, goal, language, calleeName, constraints }) {
             },
           },
         },
+
+        // Hang up on an answering machine instead of talking to it.
+        //
+        // A real call to إليسار ran 54 seconds: about nine of Freddie
+        // delivering his opening, then exactly the 45-second silence timeout.
+        // That is what voicemail looks like from here — greeting, beep, then
+        // dead air while the machine records. He had no way to tell a machine
+        // from a person who had gone quiet, so he waited out the timer and
+        // reported that the call "didn't get anywhere".
+        //
+        // Vapi's own docs are explicit that voicemailDetection ALONE does not
+        // hang up: on detection it speaks `voicemailMessage` and only then
+        // ends. Silence is the documented behaviour of this tool with an empty
+        // `messages` array AND no assistant-level `voicemailMessage` — which is
+        // why neither is set below unless VAPI_VOICEMAIL_MESSAGE is.
+        {
+          type: 'voicemail',
+          function: {
+            name: 'end_on_voicemail',
+            description:
+              'Use the moment you realise you are talking to an answering machine or voicemail system rather than a person — a recorded greeting, an automated voice, or a beep inviting you to record.',
+          },
+          messages: config.vapi.voicemailMessage
+            ? [{ type: 'request-start', content: config.vapi.voicemailMessage }]
+            : [],
+        },
       ],
     },
+
+    // Detection itself: the reliable machine signal, so this doesn't rest on
+    // Freddie noticing from the transcript alone — which he cannot do when the
+    // machine gives him silence rather than a greeting.
+    voicemailDetection: {
+      provider: 'vapi',
+      backoffPlan: { maxRetries: 5, startAtSeconds: 2, frequencySeconds: 2.5 },
+      beepMaxAwaitSeconds: 12,
+    },
+
+    // Deliberately NOT setting voicemailMessage unless one is configured:
+    // an unset value is half of what makes the hang-up silent.
+    ...(config.vapi.voicemailMessage ? { voicemailMessage: config.vapi.voicemailMessage } : {}),
 
     // Pin the transcriber to the call's language. Every call now runs in a
     // single, known language (no more bilingual "ask" mode), so a pinned
