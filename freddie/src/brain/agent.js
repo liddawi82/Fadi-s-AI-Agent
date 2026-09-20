@@ -78,6 +78,31 @@ const FAKE_CALLING_CLAIM_RE = new RegExp(
   'i'
 );
 
+// ASKING is not CLAIMING, and conflating the two broke third-party calls
+// outright for three weeks.
+//
+// The confirmation rule tells Freddie to check before ringing anyone who isn't
+// the owner. He obeyed — "Before I call, just confirming: you want me to call
+// your friend Sudhir?" — and the guard above blocked it, because "I call" sits
+// inside that sentence and looks identical to "I'm calling now". Blocked three
+// times, he fell through to the fallback. Every call to anyone but the owner
+// failed this way; calls to the owner survived only because those skip
+// confirmation and dial immediately.
+//
+// NOT_A_CLAIM can't fix this: it only excludes words sitting BETWEEN the
+// subject and the verb, and here the qualifier ("just to confirm", "shall I")
+// comes before the subject or wraps the whole sentence. So this is a separate
+// pass over the answer as a whole — if he is asking permission, he is by
+// definition not asserting that a call is under way.
+const ASKING_PERMISSION_RE = new RegExp(
+  String.raw`\b(?:just to confirm|to confirm|confirming|before i (?:call|ring|dial|phone))\b` +
+  String.raw`|\b(?:shall|should|shall i|do you want|would you like|want me|would you like me|ok(?:ay)? for me)\b` +
+  String.raw`|\bis that (?:right|correct|ok(?:ay)?)\b|\bconfirm (?:and|then|first)\b` +
+  // Arabic: بدك أتصل؟ / أأكد / بتأكد / تحب أتصل / أكدلي
+  String.raw`|بدك\s*[أا]تصل|بتحب\s*[أا]تصل|تحب\s*[أا]تصل|[أا]كدل[يي]|بتأكد|للتأكيد|بدك[يي]?اني`,
+  'i'
+);
+
 // How many times one turn may be sent back to rewrite an unbacked claim before
 // we stop asking. Without a cap, a model that keeps reasserting the same claim
 // burns every remaining step and lands on the generic "I got tangled up"
@@ -103,7 +128,18 @@ const MAX_FAKE_CLAIM_NUDGES = 2;
 // "don't call him" all contain the words — so the nudge below is written to be
 // declined. If he was asking about a past call, or something genuinely is
 // missing, the model answers normally and that answer stands.
+// Pronouns only, originally — which meant "call my friend Sudhir at +1 214…"
+// did not register as a call request at all. That is the ordinary way to ask
+// for a call to somebody new, so the one guard that should have caught the
+// Sudhir turn ending without a call never even looked.
+//
+// Two shapes now: the pronoun form, and a calling verb followed by a NAME or a
+// phone number. The name branch requires a capitalised word, "my <someone>", a
+// "the <place>", or digits, so "call back later" and "give them a call" don't
+// masquerade as named targets.
 const CALL_REQUEST = String.raw`\b(?:call|ring|phone|dial)\b[^.!?\n]{0,20}?\b(?:me|him|her|them|us|back)\b`;
+const CALL_REQUEST_NAMED = String.raw`\b(?:call|ring|phone|dial)\s+(?:up\s+)?` +
+  String.raw`(?:my\s+\w+\s+)?(?:the\s+\w+|[A-Z][a-z]+|\+?\d[\d\s().-]{6,})`;
 const GIVE_A_CALL = String.raw`\bgive (?:me|him|her|them) a (?:call|ring|buzz)\b`;
 // Levantine: كلمني، اتصل فيي/فيه، رنلي، رن علي، خابرني، دقلي، اطلبلي
 const CALL_REQUEST_AR = String.raw`كلمن[يا]|[إا]تصل\s*(?:في|ب|ع)|رن+\s*(?:ل[يه]|عل[يى])|خابرن[يا]|دق+\s*ل[يه]|اطلبل[يه]`;
@@ -112,11 +148,16 @@ const CALL_REQUEST_AR = String.raw`كلمن[يا]|[إا]تصل\s*(?:في|ب|ع)|
 // a past call, a refusal, or a hypothetical.
 const NOT_A_REQUEST = String.raw`did ?n'?t|does ?n'?t|do ?n'?t|was ?n'?t|have ?n'?t|has ?n'?t|never|why|instead of|no need to|ما |لا |ليش|مش`;
 
+// The named branch is deliberately case-SENSITIVE for the capitalised-name
+// part, so it is spliced in with its own flags rather than folded into the
+// case-insensitive alternation below.
 const OWNER_ASKED_FOR_CALL_RE = new RegExp(
   `(?:${NOT_A_REQUEST})[^.!?\\n]{0,20}?(?:${CALL_REQUEST}|${CALL_REQUEST_AR})` +
   `|(${CALL_REQUEST}|${GIVE_A_CALL}|${CALL_REQUEST_AR})`,
   'i'
 );
+const OWNER_ASKED_NAMED_RE = new RegExp(CALL_REQUEST_NAMED);
+const NOT_A_REQUEST_RE = new RegExp(NOT_A_REQUEST, 'i');
 
 // Deferred requests ("call me later", "بعدين") aren't for now, and nudging on
 // them would be noise.
@@ -150,6 +191,16 @@ const MAX_MISSED_CALL_NUDGES = 1;
 export function ownerAskedForACall(text) {
   const t = String(text || '');
   if (DEFERRED_RE.test(t)) return false;
+
+  // "call my friend Sudhir at +1 214-801-5633", "ring Ahmad", "call the
+  // restaurant" — a named target rather than a pronoun. Checked first because
+  // the pronoun pattern below cannot see these at all.
+  const named = OWNER_ASKED_NAMED_RE.exec(t);
+  if (named) {
+    const before = t.slice(Math.max(0, named.index - 25), named.index);
+    if (!NOT_A_REQUEST_RE.test(before)) return true;
+  }
+
   const m = OWNER_ASKED_FOR_CALL_RE.exec(t);
   if (!m || !m[1]) return false;
 
@@ -267,7 +318,10 @@ export async function think(text) {
     if (calls.length === 0) {
       const answer = (choice.content || '').trim() || 'Done.';
 
-      if (!calledPlaceCallThisTurn && FAKE_CALLING_CLAIM_RE.test(answer)) {
+      // ASKING_PERMISSION_RE first: a reply that checks before dialling is the
+      // behaviour the confirmation rule asks for, and blocking it left Freddie
+      // unable to ring anyone but the owner at all.
+      if (!calledPlaceCallThisTurn && FAKE_CALLING_CLAIM_RE.test(answer) && !ASKING_PERMISSION_RE.test(answer)) {
         log.warn(`Blocked a commitment-to-call reply with no place_call this turn: "${answer.slice(0, 120)}"`);
 
         // Asked twice and still claiming it? Stop asking. Returning the claim
@@ -284,8 +338,8 @@ export async function think(text) {
           const honest = DEFERRED_RE.test(text)
             ? "I can't set a call for later — I've no way to schedule one, so it would just never happen. " +
               "Message me when you want me to ring you and I'll do it there and then."
-            : "I haven't actually placed that call — something went wrong on my end. " +
-              "Send me the number and what you'd like me to say, and I'll get it done.";
+            : "I haven't placed that call yet — I kept saying I was about to instead of actually doing it. " +
+              "Tell me to go ahead and I'll ring them now.";
           memory.appendTurn('assistant', honest);
           return honest;
         }
@@ -336,7 +390,13 @@ export async function think(text) {
       // He asked for a call and the turn is ending without one. Point it out
       // once. Phrased so the model can say no: only it can tell a live request
       // from a question about a past call.
-      if (askedForCall && !calledPlaceCallThisTurn && missedCallNudges < MAX_MISSED_CALL_NUDGES) {
+      // Asking permission is a legitimate reason for a turn to end without a
+      // call — with confirmation on, it is the REQUIRED reason for anyone who
+      // isn't the owner. Widening the request detector to named targets made
+      // this carve-out necessary: "call my friend Sudhir" now registers, so
+      // without it every confirmation question would be sent back for rewriting.
+      if (askedForCall && !calledPlaceCallThisTurn && !ASKING_PERMISSION_RE.test(answer)
+          && missedCallNudges < MAX_MISSED_CALL_NUDGES) {
         missedCallNudges++;
         log.warn(`Owner's message looked like a call request but no place_call ran; asking once: "${answer.slice(0, 120)}"`);
         messages.push({
